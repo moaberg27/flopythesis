@@ -20,6 +20,17 @@ delr = Lx / ncol
 delc = Ly / nrow
 print(f"delr: {delr}, delc: {delc}")
 
+# Layer parameters (single layer, 50 m thick)
+nlay = 1
+top = 50
+botm = [0]
+
+# Aquifer parameters (single-layer anisotropic conductivity)
+k_x = 20.0
+k_y = 10.0
+k_z = 2.0
+porosity = 0.3
+
 # Circular active domain (inscribed circle inside the square model domain)
 xc = (np.arange(ncol) + 0.5) * delr
 yc = (np.arange(nrow) + 0.5) * delc
@@ -30,7 +41,7 @@ circle_radius = min(Lx, Ly) / 2.0
 active_circle_2d = (
     (Xc - circle_center_x) ** 2 + (Yc - circle_center_y) ** 2
 ) <= circle_radius**2
-idomain = np.repeat(active_circle_2d[np.newaxis, :, :], 3, axis=0).astype(int)
+idomain = np.repeat(active_circle_2d[np.newaxis, :, :], nlay, axis=0).astype(int)
 
 # Cells on the circular edge: active cells with at least one inactive 4-neighbor
 padded = np.pad(active_circle_2d, pad_width=1, mode="constant", constant_values=False)
@@ -39,17 +50,6 @@ south = padded[2:, 1:-1]
 west = padded[1:-1, :-2]
 east = padded[1:-1, 2:]
 circle_edge_2d = active_circle_2d & (~north | ~south | ~west | ~east)
-
-# Layer parameters
-nlay = 3
-top = 100
-botm = [60, 40, 0]
-
-# Aquifer parameters
-k_h = [20, 0.01, 10]
-k_v = [20, 0.01, 10]
-porosity = 0.3
-
 
 # Boundary conditions
 Q_well = -3000
@@ -100,9 +100,10 @@ dis = fp.mf6.ModflowGwfdis(gwf,
 # Node property flow package
 npf = fp.mf6.ModflowGwfnpf(gwf, 
                            save_specific_discharge=True,
-                           icelltype=[1, 0, 0],
-                           k = k_h, 
-                           k33 = k_v,
+                           icelltype=[1],
+                           k=k_x,
+                           k22=k_y,
+                           k33=k_z,
                            )
 
 # Initial Conditions
@@ -132,7 +133,7 @@ center_col = ncol // 2
 if not active_circle_2d[center_row, center_col]:
     raise ValueError("Well location is outside active circular domain.")
 well_row_col = [(center_row, center_col)]
-well_spd = [[(2, center_row, center_col), Q_well]]
+well_spd = [[(0, center_row, center_col), Q_well]]
 
 wel = fp.mf6.ModflowGwfwel(gwf,
                         stress_period_data=well_spd,
@@ -169,18 +170,18 @@ sim.run_simulation()
 fname = os.path.join(modelws, f'{modelname}.hds')
 hobj = fp.utils.HeadFile(fname)
 head = hobj.get_data(totim=1.0) # Get the head data for the first time step (totim=1.0) and store it in the variable 'head' as a 3D array (nlay, nrow, ncol).
-head_lay3 = hobj.get_data(mflay=2) # Extract the head data for layer 3 and store it in the variable 'head_lay3' as a 2D array (nrow, ncol).
-head_lay3_plot = np.ma.masked_where(idomain[2] == 0, head_lay3)
+head_lay1 = hobj.get_data(mflay=0) # Extract the head data for layer 1 and store it in the variable 'head_lay1' as a 2D array (nrow, ncol).
+head_lay1_plot = np.ma.masked_where(idomain[0] == 0, head_lay1)
 active_heads = np.ma.masked_where(idomain == 0, head)
 print(f"max head: {np.ma.max(active_heads)}, min head: {np.ma.min(active_heads)}")
 
 # Contour Plot
 pmv = fp.plot.PlotMapView(model=gwf)
-qm = pmv.plot_array(head_lay3_plot)
+qm = pmv.plot_array(head_lay1_plot)
 plt.colorbar(qm, shrink=0.5, label='Head (m)')
-cs = pmv.contour_array(head_lay3_plot, levels=range(80, 100), linewidths=1, colors='k') 
+cs = pmv.contour_array(head_lay1_plot, levels=range(80, 100), linewidths=1, colors='k') 
 plt.clabel(cs, fmt='%1.0f')
-plt.title("Head Contours for Layer 3")
+plt.title("Head Contours for Layer 1")
 
 plt.show()
 
@@ -190,14 +191,14 @@ ax = fig.add_subplot(111, projection='3d')
 x = np.arange(ncol) * delr
 y = np.arange(nrow) * delc
 X, Y = np.meshgrid(x, y)
-head_lay3_surface = np.where(idomain[2] == 1, head_lay3, np.nan)
+head_lay1_surface = np.where(idomain[0] == 1, head_lay1, np.nan)
 
-surf = ax.plot_surface(X, Y, head_lay3_surface, cmap='viridis', linewidth=0, antialiased=True)
+surf = ax.plot_surface(X, Y, head_lay1_surface, cmap='viridis', linewidth=0, antialiased=True)
 fig.colorbar(surf, shrink=0.6, label='Head (m)')
 ax.set_xlabel('X (m)')
 ax.set_ylabel('Y (m)')
 ax.set_zlabel('Head (m)')
-ax.set_title('3D Head Surface (Layer 3)')
+ax.set_title('3D Head Surface (Layer 1)')
 plt.show()
 
 # Water Balance 
@@ -276,7 +277,7 @@ for rc in well_row_col: # loop over all well cells​
         lx = (delc / 2 + pr_i[0]) / delc # compute local x coordinate of the particle in the cell.​
         ly = (delr / 2 + pr_i[1]) / delr
         lz = 0.5 # vertical position halfway in the layer​
-        partlocs.append((2,r,c)) # particles are in layer 2, row r,column c.
+        partlocs.append((0,r,c)) # particles are in layer 1, row r,column c.
         localx.append(lx)
         localy.append(ly)
         localz.append(lz)
@@ -321,7 +322,7 @@ with open(mppth_path, 'w') as f:
 #Read And Plot Pathlines​
 
 pmv = fp.plot.PlotMapView(model=gwf)#create a map view plot of the groundwater flow model​
-pmv.contour_array(head, levels=range(50,70), colors='C0') # add contours of the head distribution​
+pmv.contour_array(head_lay1_plot, levels=range(80, 100), colors='C0') # add contours of the head distribution​
 fname = os.path.join(modelws, f"{modelname}_abs_wells_bw.mppth") # path to the MODPATH output file ​
 p = fp.utils.PathlineFile(fname) # read the pathline file​
 
