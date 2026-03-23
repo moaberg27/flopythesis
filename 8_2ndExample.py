@@ -232,6 +232,29 @@ for l in range(nlay):
 plt.tight_layout()
 plt.show()
 
+# Standalone vector field plot for the bottom layer
+bottom_layer = nlay - 1
+fig, ax = plt.subplots(figsize=(7, 7))
+pmv = fp.plot.PlotMapView(model=gwf, ax=ax, layer=bottom_layer)
+qx_bottom = np.where(idomain[bottom_layer] == 1, qx[bottom_layer], np.nan)
+qy_bottom = np.where(idomain[bottom_layer] == 1, qy[bottom_layer], np.nan)
+pmv.plot_vector(
+    qx_bottom,
+    qy_bottom,
+    istep=3,
+    jstep=3,
+    scale=1.0,
+    color="black",
+)
+pmv.plot_grid(colors="0.75", lw=0.3)
+ax.set_aspect("equal", adjustable="box")
+ax.set_xlim((0, Lx))
+ax.set_ylim((0, Ly))
+ax.set_title("Bottom Layer Flow Vectors")
+ax.set_xlabel("X (m)")
+ax.set_ylabel("Y (m)")
+plt.show()
+
 # Function to create N particle positions on a circle​
 def PointsOnCircle(r=10, N=30): # default is 10 m radius and 28 particles​
     rv = [2 * np.pi /N *n_i for n_i in range(0,N)] # N angles equally spaced around the circle​
