@@ -20,6 +20,26 @@ delr = Lx / ncol
 delc = Ly / nrow
 print(f"delr: {delr}, delc: {delc}")
 
+# Circular active domain (inscribed circle inside the square model domain)
+xc = (np.arange(ncol) + 0.5) * delr
+yc = (np.arange(nrow) + 0.5) * delc
+Xc, Yc = np.meshgrid(xc, yc)
+circle_center_x = Lx / 2.0
+circle_center_y = Ly / 2.0
+circle_radius = min(Lx, Ly) / 2.0
+active_circle_2d = (
+    (Xc - circle_center_x) ** 2 + (Yc - circle_center_y) ** 2
+) <= circle_radius**2
+idomain = np.repeat(active_circle_2d[np.newaxis, :, :], 3, axis=0).astype(int)
+
+# Cells on the circular edge: active cells with at least one inactive 4-neighbor
+padded = np.pad(active_circle_2d, pad_width=1, mode="constant", constant_values=False)
+north = padded[:-2, 1:-1]
+south = padded[2:, 1:-1]
+west = padded[1:-1, :-2]
+east = padded[1:-1, 2:]
+circle_edge_2d = active_circle_2d & (~north | ~south | ~west | ~east)
+
 # Layer parameters
 nlay = 3
 top = 100
@@ -74,6 +94,7 @@ dis = fp.mf6.ModflowGwfdis(gwf,
                            delc=delc,
                            top=top, 
                            botm=botm,
+                           idomain=idomain,
                            )
 
 # Node property flow package
@@ -95,10 +116,10 @@ ic = fp.mf6.ModflowGwfic(gwf,
 
 # Specified Head Package
 chd_spd = []
+edge_rows, edge_cols = np.where(circle_edge_2d)
 for k in range(nlay):
-    for r in range(nrow):
-        chd_spd.append([(k, r, 0), h1])
-        chd_spd.append([(k, r, ncol - 1), h2])
+    for r, c in zip(edge_rows, edge_cols):
+        chd_spd.append([(k, int(r), int(c)), h1])
 
 chd = fp.mf6.ModflowGwfchd(gwf, 
                            stress_period_data=chd_spd,
@@ -108,6 +129,8 @@ chd = fp.mf6.ModflowGwfchd(gwf,
 # Well Package
 center_row = nrow // 2
 center_col = ncol // 2
+if not active_circle_2d[center_row, center_col]:
+    raise ValueError("Well location is outside active circular domain.")
 well_row_col = [(center_row, center_col)]
 well_spd = [[(2, center_row, center_col), Q_well]]
 
@@ -147,13 +170,15 @@ fname = os.path.join(modelws, f'{modelname}.hds')
 hobj = fp.utils.HeadFile(fname)
 head = hobj.get_data(totim=1.0) # Get the head data for the first time step (totim=1.0) and store it in the variable 'head' as a 3D array (nlay, nrow, ncol).
 head_lay3 = hobj.get_data(mflay=2) # Extract the head data for layer 3 and store it in the variable 'head_lay3' as a 2D array (nrow, ncol).
-print(f"max head: {np.max(head)}, min head: {np.min(head)}")
+head_lay3_plot = np.ma.masked_where(idomain[2] == 0, head_lay3)
+active_heads = np.ma.masked_where(idomain == 0, head)
+print(f"max head: {np.ma.max(active_heads)}, min head: {np.ma.min(active_heads)}")
 
 # Contour Plot
 pmv = fp.plot.PlotMapView(model=gwf)
-qm = pmv.plot_array(head_lay3)
+qm = pmv.plot_array(head_lay3_plot)
 plt.colorbar(qm, shrink=0.5, label='Head (m)')
-cs = pmv.contour_array(head_lay3, levels=range(80, 100), linewidths=1, colors='k') 
+cs = pmv.contour_array(head_lay3_plot, levels=range(80, 100), linewidths=1, colors='k') 
 plt.clabel(cs, fmt='%1.0f')
 plt.title("Head Contours for Layer 3")
 
@@ -165,8 +190,9 @@ ax = fig.add_subplot(111, projection='3d')
 x = np.arange(ncol) * delr
 y = np.arange(nrow) * delc
 X, Y = np.meshgrid(x, y)
+head_lay3_surface = np.where(idomain[2] == 1, head_lay3, np.nan)
 
-surf = ax.plot_surface(X, Y, head_lay3, cmap='viridis', linewidth=0, antialiased=True)
+surf = ax.plot_surface(X, Y, head_lay3_surface, cmap='viridis', linewidth=0, antialiased=True)
 fig.colorbar(surf, shrink=0.6, label='Head (m)')
 ax.set_xlabel('X (m)')
 ax.set_ylabel('Y (m)')
@@ -180,14 +206,20 @@ cbb = fp.utils.CellBudgetFile(fname, precision='double')
 
 # Read Flow and Quiver Plot
 spdis = cbb.get_data(text='DATA-SPDIS')[0] 
-qx = spdis["qx"].reshape((nlay, nrow, ncol))
-qy = spdis["qy"].reshape((nlay, nrow, ncol)) 
+qx = np.full((nlay, nrow, ncol), np.nan, dtype=float)
+qy = np.full((nlay, nrow, ncol), np.nan, dtype=float)
+
+active_idx = np.where(idomain == 1)
+qx[active_idx] = spdis["qx"]
+qy[active_idx] = spdis["qy"]
 
 for l in range(nlay):
     ax = plt.subplot(2, 2, l+1)
     pmv = fp.plot.PlotMapView(model=gwf, ax=ax, layer=l)
-    pmv.plot_vector(qx[l], 
-                        qy[l], 
+    qx_l = np.where(idomain[l] == 1, qx[l], np.nan)
+    qy_l = np.where(idomain[l] == 1, qy[l], np.nan)
+    pmv.plot_vector(qx_l, 
+                        qy_l, 
                         scale=1,
                         istep=4,
                         jstep=4,
