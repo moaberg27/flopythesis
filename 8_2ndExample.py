@@ -26,8 +26,8 @@ top = 50
 botm = [0]
 
 # Aquifer parameters (single-layer anisotropic conductivity)
-k_x = 20.0
-k_y = 10.0
+k_x = 2.0
+k_y = 2.0
 k_z = 2.0
 porosity = 0.3
 
@@ -52,7 +52,7 @@ east = padded[1:-1, 2:]
 circle_edge_2d = active_circle_2d & (~north | ~south | ~west | ~east)
 
 # Boundary conditions
-Q_well = -3000
+Q_well = -5000
 h1 = 100
 h2 = 100
 # Create the Simulation
@@ -179,7 +179,7 @@ print(f"max head: {np.ma.max(active_heads)}, min head: {np.ma.min(active_heads)}
 pmv = fp.plot.PlotMapView(model=gwf)
 qm = pmv.plot_array(head_lay1_plot)
 plt.colorbar(qm, shrink=0.5, label='Head (m)')
-cs = pmv.contour_array(head_lay1_plot, levels=range(80, 100), linewidths=1, colors='k') 
+cs = pmv.contour_array(head_lay1_plot, levels=range(50, 100), linewidths=1, colors='k') 
 plt.clabel(cs, fmt='%1.0f')
 plt.title("Head Contours for Layer 1")
 
@@ -231,7 +231,6 @@ for l in range(nlay):
     plt.title(f"Layer {l + 1}")
 
 plt.tight_layout()
-plt.show()
 
 # Standalone vector field plot for the bottom layer
 bottom_layer = nlay - 1
@@ -251,13 +250,13 @@ pmv.plot_grid(colors="0.75", lw=0.3)
 ax.set_aspect("equal", adjustable="box")
 ax.set_xlim((0, Lx))
 ax.set_ylim((0, Ly))
-ax.set_title("Bottom Layer Flow Vectors")
+ax.set_title("Flow Vectors")
 ax.set_xlabel("X (m)")
 ax.set_ylabel("Y (m)")
 plt.show()
 
 # Function to create N particle positions on a circle​
-def PointsOnCircle(r=10, N=30): # default is 10 m radius and 28 particles​
+def PointsOnCircle(r=5, N=30): # default is 10 m radius and 28 particles​
     rv = [2 * np.pi /N *n_i for n_i in range(0,N)] # N angles equally spaced around the circle​
     return np.vstack((r * np.cos(rv), r * np.sin(rv))).T # convert to x and y coordinates and transpose to get N rows of (x,y) pairs​.
 
