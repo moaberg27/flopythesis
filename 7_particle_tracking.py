@@ -12,12 +12,10 @@ import numpy as np
 proj_root = Path.cwd().parent.parent
 script_dir = Path(__file__).resolve().parent
 
-
-# Use executables from the FLOPY folder (one level up from flopythesis)
-flopy_root = script_dir.parent
-mf_exe = (flopy_root / "mf6.exe").resolve()
-gridgen_exe = (flopy_root / "gridgen_x64.exe").resolve()
-mp_exe = (flopy_root / "mpath7.exe").resolve()
+# Use local executables bundled in this workspace.
+mf_exe = (script_dir / "mf6.exe").resolve()
+gridgen_exe = (script_dir / "gridgen_x64.exe").resolve()
+mp_exe = (script_dir / "mpath7.exe").resolve()
 
 if not mf_exe.exists():
     raise FileNotFoundError(f"MODFLOW executable not found: {mf_exe}")
@@ -172,7 +170,7 @@ cell2d = gridprops["cell2d"]
 
 # Create simulation
 sim = flopy.mf6.MFSimulation(
-    sim_name=model_name, version="mf6", exe_name="mf6", sim_ws=model_ws
+    sim_name=model_name, version="mf6", exe_name=str(mf_exe), sim_ws=model_ws
 )
 
 # create tdis package
