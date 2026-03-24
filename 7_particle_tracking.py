@@ -12,17 +12,31 @@ import numpy as np
 proj_root = Path.cwd().parent.parent
 script_dir = Path(__file__).resolve().parent
 
-# Use local executables bundled in this workspace.
-mf_exe = (script_dir / "mf6.exe").resolve()
-gridgen_exe = (script_dir / "gridgen_x64.exe").resolve()
-mp_exe = (script_dir / "mpath7.exe").resolve()
+workspace_root = script_dir.parent
 
-if not mf_exe.exists():
-    raise FileNotFoundError(f"MODFLOW executable not found: {mf_exe}")
-if not gridgen_exe.exists():
-    raise FileNotFoundError(f"Gridgen executable not found: {gridgen_exe}")
-if not mp_exe.exists():
-    raise FileNotFoundError(f"MODPATH executable not found: {mp_exe}")
+
+def resolve_executable(exe_name: str) -> Path:
+    """Resolve executable paths, preferring FLOPY root-level binaries."""
+    search_dirs = [
+        workspace_root,
+        script_dir,
+        workspace_root / "groundwater_modelling",
+    ]
+
+    for folder in search_dirs:
+        candidate = (folder / exe_name).resolve()
+        if candidate.exists():
+            return candidate
+
+    searched = "\n  - ".join(str(folder.resolve()) for folder in search_dirs)
+    raise FileNotFoundError(
+        f"Executable '{exe_name}' not found. Searched:\n  - {searched}"
+    )
+
+
+mf_exe = resolve_executable("mf6.exe")
+gridgen_exe = resolve_executable("gridgen_x64.exe")
+mp_exe = resolve_executable("mpath7.exe")
 
 # run installed version of flopy or add local path
 try:
@@ -170,7 +184,7 @@ cell2d = gridprops["cell2d"]
 
 # Create simulation
 sim = flopy.mf6.MFSimulation(
-    sim_name=model_name, version="mf6", exe_name="mf6", sim_ws=model_ws
+    sim_name=model_name, version="mf6", exe_name=str(mf_exe), sim_ws=model_ws
 )
 
 # create tdis package
