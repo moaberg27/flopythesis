@@ -2,14 +2,14 @@ import os
 import re
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.lines import Line2D
 import flopy as fp
 from flopy.utils.gridgen import Gridgen
 
 modelname = 'webinar'
 modelws = './webinar'
 path = os.getcwd()
-
-gridgen_exe = os.path.join(os.getcwd(), "gridgen_x64.exe")
 plt.rcParams['figure.figsize'] = (5, 5)
 plt.rcParams["figure.autolayout"] = True
 
@@ -19,8 +19,8 @@ Lx = 5000
 Ly = 5000
 ncol = 100
 nrow = 100
-delr = Lx / ncol   # 50 m
-delc = Ly / nrow   # 50 m
+delr = Lx / ncol
+delc = Ly / nrow
 print(f"delr: {delr}, delc: {delc}")
 
 # Layer parameters (single layer, 50 m thick)
@@ -40,15 +40,18 @@ circle_center_y = Ly / 2.0
 circle_radius = min(Lx, Ly) / 2.0
 
 # Boundary conditions
-Q_well = -5000
+Q_well_extract = -5000
+Q_well_inject = 5000
 h1 = 100
 h2 = 100
+well_offset = 10  # cells from centre
 
+gridgen_exe = os.path.join(os.getcwd(), "gridgen_x64.exe")
 mf6_exe = os.path.join(os.getcwd(), "mf6.exe")
 mpath7_exe = os.path.join(os.getcwd(), "mpath7.exe")
 
 # =============================================================================
-# GRIDGEN: build refined DISV grid with nested zones around the well
+# GRIDGEN: build refined DISV grid with nested zones around the wells
 # =============================================================================
 # Base MODFLOW 2005 model used only to define the background grid for Gridgen
 ms = fp.modflow.Modflow(exe_name=mf6_exe)
@@ -66,10 +69,10 @@ def _rect_poly(xmin, xmax, ymin, ymax):
 
 cx, cy = circle_center_x, circle_center_y
 
-# Three nested refinement zones centred on the well (model centre)
-#   level 1 at cells ~25 m   (outer zone  Â±1500 m)
-#   level 2 at cells ~12.5 m (middle zone  Â±750 m)
-#   level 3 at cells  ~6.25 m (inner zone   Â±300 m)
+# Three nested refinement zones centred on the model
+#   level 1 â†’ cells ~25 m   (outer zone  Â±1500 m)
+#   level 2 â†’ cells ~12.5 m (middle zone  Â±750 m)
+#   level 3 â†’ cells  ~6.25 m (inner zone   Â±300 m)
 g.add_refinement_features(_rect_poly(cx-1500, cx+1500, cy-1500, cy+1500),
                            "polygon", 1, range(nlay))
 g.add_refinement_features(_rect_poly(cx-750,  cx+750,  cy-750,  cy+750),
@@ -100,20 +103,35 @@ yc_cells = np.array([c[2] for c in cell2d])
 dist_sq      = (xc_cells - circle_center_x)**2 + (yc_cells - circle_center_y)**2
 active_circle = dist_sq <= circle_radius**2
 
-# idomain for DISV: shape (nlay, ncpl) â€” 0 = inactive (outside circle)
+# idomain for DISV: shape (nlay, ncpl) â€“ 0 = inactive (outside circle)
 idomain_disv = np.zeros((nlay, ncpl), dtype=int)
 idomain_disv[:, active_circle] = 1
 
 # Circle edge cells: active cells within one original cell-width of the boundary
-dist          = np.sqrt(dist_sq)
-tolerance     = max(delr, delc)                    # 50 m
+dist             = np.sqrt(dist_sq)
+tolerance        = max(delr, delc)  # 50 m
 circle_edge_disv = active_circle & (dist >= circle_radius - tolerance)
 
-# Well cell: active cell whose centre is closest to the model centre
-dist_to_center = np.where(active_circle, dist_sq, np.inf)
-well_cell_icpl = int(np.argmin(dist_to_center))
-print(f"Well cell: icpl={well_cell_icpl}, "
-      f"centre=({xc_cells[well_cell_icpl]:.1f}, {yc_cells[well_cell_icpl]:.1f})")
+# =============================================================================
+# Dipole well cells: closest active DISV cells to target positions
+# =============================================================================
+extract_target_x = circle_center_x - well_offset * delr
+extract_target_y = circle_center_y
+inject_target_x  = circle_center_x + well_offset * delr
+inject_target_y  = circle_center_y
+
+d_extract = np.where(active_circle,
+    (xc_cells - extract_target_x)**2 + (yc_cells - extract_target_y)**2, np.inf)
+extract_well_icpl = int(np.argmin(d_extract))
+
+d_inject = np.where(active_circle,
+    (xc_cells - inject_target_x)**2 + (yc_cells - inject_target_y)**2, np.inf)
+inject_well_icpl = int(np.argmin(d_inject))
+
+print(f"Extraction well: icpl={extract_well_icpl}, "
+      f"centre=({xc_cells[extract_well_icpl]:.1f}, {yc_cells[extract_well_icpl]:.1f})")
+print(f"Injection well:  icpl={inject_well_icpl}, "
+      f"centre=({xc_cells[inject_well_icpl]:.1f}, {yc_cells[inject_well_icpl]:.1f})")
 
 # =============================================================================
 # MF6 simulation
@@ -156,20 +174,34 @@ npf = fp.mf6.ModflowGwfnpf(gwf,
                             k22=k_y,
                             k33=k_z)
 
-# Initial conditions â€” uniform head (h1 == h2 == 100)
+# Initial conditions â€“ uniform head
 ic = fp.mf6.ModflowGwfic(gwf, strt=h1)
 
 # Specified Head on the circular edge
+# Left quarter (dx dominant, dx<0) â†’ h1; right quarter (dx dominant, dx>0) â†’ h2
+# Top/bottom quarters (dy dominant) â†’ no-flow (no CHD assigned)
 chd_spd = []
+no_flow_mask = np.zeros(ncpl, dtype=bool)
 edge_cells = np.where(circle_edge_disv)[0]
 for k in range(nlay):
     for icpl in edge_cells:
-        chd_spd.append([(k, int(icpl)), h1])
+        dx = xc_cells[icpl] - circle_center_x
+        dy = yc_cells[icpl] - circle_center_y
+        if abs(dx) >= abs(dy):
+            head_bc = h1 if dx < 0 else h2
+            chd_spd.append([(k, int(icpl)), float(head_bc)])
+        else:
+            if k == 0:
+                no_flow_mask[icpl] = True
 
 chd = fp.mf6.ModflowGwfchd(gwf, stress_period_data=chd_spd)
 
-# Well package
-well_spd = [[(0, well_cell_icpl), Q_well]]
+# Dipole well package
+well_spd = [
+    [(0, extract_well_icpl), Q_well_extract],
+    [(0, inject_well_icpl),  Q_well_inject],
+]
+
 wel = fp.mf6.ModflowGwfwel(gwf, stress_period_data=well_spd)
 
 # Output control
@@ -179,8 +211,12 @@ oc = fp.mf6.ModflowGwfoc(gwf,
                           saverecord=[('HEAD', 'ALL'), ('BUDGET', 'ALL')],
                           printrecord=[('HEAD', 'LAST'), ('BUDGET', 'LAST')])
 
-# Check input â€” grid + BCs
+# Check input â€“ grid + BCs
+no_flow_arr = np.where(no_flow_mask, 1.0, np.nan)
 pmv = fp.plot.PlotMapView(model=gwf)
+pmv.plot_array(no_flow_arr,
+               cmap=mcolors.ListedColormap(["limegreen"]),
+               alpha=0.9, vmin=0.0, vmax=1.0)
 pmv.plot_bc('CHD', color='blue')
 pmv.plot_bc('WEL', plotAll=True, color='red')
 pmv.plot_grid(colors='silver', lw=0.3)
@@ -245,25 +281,24 @@ ax.set_ylabel("Y (m)")
 plt.show()
 
 # =============================================================================
-# MODPATH 7 â€” backward particle tracking from the well
+# MODPATH 7 â€“ backward particle tracking from the extraction well
 # =============================================================================
-# MODPATH 7 terminates particles that START inside a strong sink/source cell
-# (the well cell is a strong source in backward time).
-# Fix: place particles in a ring of DISV cells surrounding the well at a small
-# radius, finding the closest active cell to each ring point.
+# Place particles in a ring of DISV cells surrounding the extraction well.
+# MODPATH 7 terminates particles that START inside a strong sink cell,
+# so particles are released just outside it.
 N_particles = 30
-r_ring = 50.0   # 100 m ring â€” outside the well cell, inside the refined zone
+r_ring = 100.0   # 100 m ring â€“ outside the extraction well cell
 theta = np.linspace(0, 2 * np.pi, N_particles, endpoint=False)
-ring_x = cx + r_ring * np.cos(theta)
-ring_y = cy + r_ring * np.sin(theta)
+ring_x = xc_cells[extract_well_icpl] + r_ring * np.cos(theta)
+ring_y = yc_cells[extract_well_icpl] + r_ring * np.sin(theta)
 
-# For each ring point find the closest active DISV cell (excluding the well cell)
+# For each ring point find the closest active DISV cell (excluding the extraction well)
 plocs = []
 for px, py in zip(ring_x, ring_y):
     d = (xc_cells - px) ** 2 + (yc_cells - py) ** 2
     d[~active_circle] = np.inf
-    d[well_cell_icpl] = np.inf          # exclude the strong sink cell itself
-    plocs.append(int(np.argmin(d)))     # absolute node number (layer 0)
+    d[extract_well_icpl] = np.inf
+    plocs.append(int(np.argmin(d)))
 
 # All particles start at the cell centre (local coords = 0.5)
 localx = [0.5] * N_particles
@@ -303,16 +338,36 @@ with open(mppth_path, 'w') as f:
     f.write(fixed)
 
 # Read and plot pathlines
-pmv = fp.plot.PlotMapView(model=gwf)
-pmv.contour_array(head_lay1_masked,
-                  levels=np.linspace(h_min, h_max, 15),
-                  colors='C0')
+fig, ax = plt.subplots(figsize=(7, 7))
+pmv = fp.plot.PlotMapView(model=gwf, ax=ax)
+cs = pmv.contour_array(head_lay1_masked,
+                       levels=np.linspace(h_min, h_max, 15),
+                       colors='C0')
+ax.clabel(cs, fmt='%1.1f', fontsize=8)
+
 p = fp.utils.PathlineFile(mppth_path)
 for i in range(p.get_maxid() + 1):
     pi = p.get_data(partid=i)
-    plt.plot(pi['x'], pi['y'], 'C1', lw=1)
+    ax.plot(pi['x'], pi['y'], 'C1', lw=1)
 
-plt.title("Pathlines from the Well (Backward)")
-plt.xlabel("X (m)")
-plt.ylabel("Y (m)")
+# Mark well locations
+ax.scatter(xc_cells[extract_well_icpl], yc_cells[extract_well_icpl],
+           c='red', marker='v', s=60)
+ax.scatter(xc_cells[inject_well_icpl], yc_cells[inject_well_icpl],
+           c='blue', marker='^', s=60)
+
+legend_handles = [
+    Line2D([0], [0], color='C0', lw=1, label='Head contours (m)'),
+    Line2D([0], [0], color='C1', lw=1.5, label='Backward pathlines'),
+    Line2D([0], [0], marker='v', color='w', markerfacecolor='red', markersize=8, label='Extraction well'),
+    Line2D([0], [0], marker='^', color='w', markerfacecolor='blue', markersize=8, label='Injection well'),
+]
+ax.legend(handles=legend_handles, loc='upper right', frameon=True)
+
+ax.set_title("Pathlines from the Extraction Well (Backward)")
+ax.set_xlabel("X (m)")
+ax.set_ylabel("Y (m)")
+ax.set_xlim((0, Lx))
+ax.set_ylim((0, Ly))
+ax.set_aspect("equal", adjustable="box")
 plt.show()
