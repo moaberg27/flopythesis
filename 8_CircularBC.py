@@ -5,15 +5,16 @@ import matplotlib.pyplot as plt
 import flopy as fp
 from flopy.utils.gridgen import Gridgen
 
-modelname = 'webinar'
-modelws = './webinar'
+modelname = 'circular'
+modelws = './circular'
 path = os.getcwd()
 
 gridgen_exe = os.path.join(os.getcwd(), "gridgen_x64.exe")
 plt.rcParams['figure.figsize'] = (5, 5)
 plt.rcParams["figure.autolayout"] = True
 
-# Model parameters
+# MODEL PARAMETERS
+
 # Grid parameters
 Lx = 5000
 Ly = 5000
@@ -28,7 +29,7 @@ nlay = 1
 top = 50
 botm = [0]
 
-# Aquifer parameters
+# Aquifer parameters (homogeneous, isotropic)
 k_x = 2.0
 k_y = 2.0
 k_z = 2.0
@@ -47,9 +48,8 @@ h2 = 100
 mf6_exe = os.path.join(os.getcwd(), "mf6.exe")
 mpath7_exe = os.path.join(os.getcwd(), "mpath7.exe")
 
-# =============================================================================
-# GRIDGEN: build refined DISV grid with nested zones around the well
-# =============================================================================
+# GRIDGEN (build refined DISV grid with nested zones around the well)
+
 # Base MODFLOW 2005 model used only to define the background grid for Gridgen
 ms = fp.modflow.Modflow(exe_name=mf6_exe)
 fp.modflow.ModflowDis(ms, nlay=nlay, nrow=nrow, ncol=ncol,
@@ -67,9 +67,9 @@ def _rect_poly(xmin, xmax, ymin, ymax):
 cx, cy = circle_center_x, circle_center_y
 
 # Three nested refinement zones centred on the well (model centre)
-#   level 1 at cells ~25 m   (outer zone  Â±1500 m)
-#   level 2 at cells ~12.5 m (middle zone  Â±750 m)
-#   level 3 at cells  ~6.25 m (inner zone   Â±300 m)
+#   level 1 at cells ~25 m   (outer zone  at 1500 m)
+#   level 2 at cells ~12.5 m (middle zone  at 750 m)
+#   level 3 at cells  ~6.25 m (inner zone   at 300 m)
 g.add_refinement_features(_rect_poly(cx-1500, cx+1500, cy-1500, cy+1500),
                            "polygon", 1, range(nlay))
 g.add_refinement_features(_rect_poly(cx-750,  cx+750,  cy-750,  cy+750),
@@ -94,9 +94,7 @@ print(f"Total cells in DISV grid: {ncpl}")
 xc_cells = np.array([c[1] for c in cell2d])
 yc_cells = np.array([c[2] for c in cell2d])
 
-# =============================================================================
 # Circular active domain mapped onto the DISV grid
-# =============================================================================
 dist_sq      = (xc_cells - circle_center_x)**2 + (yc_cells - circle_center_y)**2
 active_circle = dist_sq <= circle_radius**2
 
@@ -115,9 +113,9 @@ well_cell_icpl = int(np.argmin(dist_to_center))
 print(f"Well cell: icpl={well_cell_icpl}, "
       f"centre=({xc_cells[well_cell_icpl]:.1f}, {yc_cells[well_cell_icpl]:.1f})")
 
-# =============================================================================
-# MF6 simulation
-# =============================================================================
+
+# MF6 SIMUALTION SETUP
+
 sim = fp.mf6.MFSimulation(sim_name=modelname,
                           version='mf6',
                           exe_name=mf6_exe,
@@ -156,7 +154,7 @@ npf = fp.mf6.ModflowGwfnpf(gwf,
                             k22=k_y,
                             k33=k_z)
 
-# Initial conditions â€” uniform head (h1 == h2 == 100)
+# Initial conditions: uniform head (h1 == h2)
 ic = fp.mf6.ModflowGwfic(gwf, strt=h1)
 
 # Specified Head on the circular edge
@@ -179,7 +177,7 @@ oc = fp.mf6.ModflowGwfoc(gwf,
                           saverecord=[('HEAD', 'ALL'), ('BUDGET', 'ALL')],
                           printrecord=[('HEAD', 'LAST'), ('BUDGET', 'LAST')])
 
-# Check input â€” grid + BCs
+# Check input (grid + BCs)
 pmv = fp.plot.PlotMapView(model=gwf)
 pmv.plot_bc('CHD', color='blue')
 pmv.plot_bc('WEL', plotAll=True, color='red')
@@ -231,6 +229,13 @@ qy = np.full(ncpl, np.nan, dtype=float)
 active_nodes = np.where(idomain_disv[0] > 0)[0]
 qx[active_nodes] = spdis["qx"]
 qy[active_nodes] = spdis["qy"]
+
+# VELOCITIES 
+vx = np.full(ncpl, np.nan, dtype=float)
+vy = np.full(ncpl, np.nan, dtype=float)
+vx[active_nodes] = qx[active_nodes]/porosity 
+vy[active_nodes] = qy[active_nodes]/porosity
+
 
 fig, ax = plt.subplots(figsize=(7, 7))
 pmv = fp.plot.PlotMapView(model=gwf, ax=ax)

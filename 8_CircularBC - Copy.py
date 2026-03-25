@@ -47,14 +47,14 @@ h2 = 100
 # Transport parameters
 alpha_l          = 50.0      # longitudinal dispersivity (m)
 alpha_th         = 5.0       # transverse horizontal dispersivity (m)
-diffc            = 8.64e-5   # effective diffusion coefficient (mÂ²/d)
+diffc            = 1   # effective diffusion coefficient (mÂ²/d)
 c_source         = 1.0       # input concentration at circular boundary (dimensionless)
 
 # Time discretisation for transport
 # Mean advective travel time from boundary to well: Ï€Â·RÂ²Â·nÂ·b / Q â‰ˆ 58 905 days
 # Use ~1.7Ã— that to capture the full breakthrough curve
 perlen_transport = 100_000.0   # total simulation time (days, ~273 years)
-nstp_transport   = 200         # number of time steps
+nstp_transport   = 1         # number of time steps
 tsmult_transport = 1.03        # time-step multiplier (geometrically increasing)
 
 mf6_exe = os.path.join(os.getcwd(), "mf6.exe")
