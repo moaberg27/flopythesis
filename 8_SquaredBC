@@ -1,4 +1,5 @@
-import os 
+import os
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -7,6 +8,7 @@ import flopy as fp
 modelname = 'squared'
 modelws = './squared'
 path = os.getcwd()
+_proj_root = Path(__file__).resolve().parent.parent
 plt.rcParams['figure.figsize'] = (5, 5)
 plt.rcParams["figure.autolayout"] = True
 
@@ -42,7 +44,7 @@ h2 = 200   # right edge
 h3 = 200   # top edge
 h4 = 200   # bottom edge
 # Create the Simulation
-exe_name = "mf6.exe"
+exe_name = str(_proj_root / "mf6.exe")
 sim = fp.mf6.MFSimulation(sim_name=modelname, 
                           version='mf6',
                           exe_name=exe_name,
@@ -284,7 +286,7 @@ pg = fp.modpath.ParticleGroup(particledata=particledata) #create a particle grou
 mp = fp.modpath.Modpath7(modelname=f"{modelname}_abs_wells_bw", #build  MODPATH 7 model with the GWF​
                          model_ws=modelws,
                          flowmodel=gwf,
-                         exe_name=r"C:\\Users\\SEAM94860\\FLOPY\\general\\mpath7.exe")\
+                         exe_name=str(_proj_root / "mpath7.exe"))\
 
 mpbas = fp.modpath.Modpath7Bas(mp,porosity=0.3) # set the porosity for the MODPATH model​
 
