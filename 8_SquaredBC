@@ -12,7 +12,7 @@ _proj_root = Path(__file__).resolve().parent.parent
 plt.rcParams['figure.figsize'] = (5, 5)
 plt.rcParams["figure.autolayout"] = True
 
-# Model parameters
+# MODEL SETUP
 # Grid parameters
 Lx = 5000
 Ly = 5000
