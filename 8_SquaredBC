@@ -89,7 +89,7 @@ dis = fp.mf6.ModflowGwfdis(gwf,
 # Node property flow package
 npf = fp.mf6.ModflowGwfnpf(gwf, 
                            save_specific_discharge=True,
-                           icelltype=1,
+                           icelltype=0,
                            k=k_x,
                            k22=k_y,
                            k33=k_z,
