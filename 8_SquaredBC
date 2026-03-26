@@ -43,6 +43,7 @@ h1 = 200   # left edge
 h2 = 200   # right edge
 h3 = 200   # top edge
 h4 = 200   # bottom edge
+
 # Create the Simulation
 exe_name = str(_proj_root / "mf6.exe")
 sim = fp.mf6.MFSimulation(sim_name=modelname, 
@@ -52,7 +53,7 @@ sim = fp.mf6.MFSimulation(sim_name=modelname,
                           )
 
 # Time discretization
-tdis_rc = [(1.0, 1, 1.0)]
+tdis_rc = [(1.0, 1, 1.0)] #1.0 day time step, 1 time step, multiplier of 1.0 for subsequent steps (no change in time step size)
 tdis = fp.mf6.ModflowTdis(
     sim,
     time_units="DAYS",
@@ -335,10 +336,10 @@ plt.show()
 
 # MODPATH already computes travel times along each pathline using
 # the velocity field and porosity.  For backward tracking the
-# recorded "time" at the last waypoint of each particle equals
+# recorded time at the last waypoint of each particle equals
 # the total travel time from its recharge location to the well.
 
-# --- 1. Extract arrival times and trace lengths per particle ---
+# 1 Extract arrival times and trace lengths per particle 
 arrival_times = []   # total travel time per particle [days]
 trace_lengths = []   # total path length per particle  [m]
 particle_velocities = []  # mean pore velocity per particle [m/d]
@@ -349,8 +350,8 @@ p = fp.utils.PathlineFile(fname)
 # Loop over all particles and extract their pathline data to compute total travel time, path length, and mean velocity.
 # Each particle's pathline is represented as a sequence of waypoints (MODPATH records a new waypoint every time a particle crosses a cell boundary) 
 # with coordinates and travel times. 
-# We compute the total path length by summing the distances between consecutive waypoints, 
-# and the total travel time is given by the time at the last waypoint. 
+# We compute the total path length by summing the distances between consecutive waypoints. 
+# The total travel time is given by the time at the last waypoint. 
 # The mean pore velocity is then calculated as total path length divided by total travel time.
 
 for pid in range(p.get_maxid() + 1): # loop over all particle IDs
@@ -394,9 +395,9 @@ print(f"Mean velocities [m/d]: min={np.nanmin(particle_velocities):.4f}, "
 # Convert to years for readability
 arrival_years = arrival_times / 365.25
 
-# --- 2. Breakthrough curve (cumulative fraction vs time) ---
-sorted_times = np.sort(arrival_years)
-cumulative_fraction = np.arange(1, len(sorted_times) + 1) / len(sorted_times)
+# 2 Breakthrough curve (cumulative fraction vs time) 
+sorted_times = np.sort(arrival_years) # sort the arrival times in ascending order to prepare for plotting the breakthrough curve (cumulative fraction of particles arrived vs travel time)
+cumulative_fraction = np.arange(1, len(sorted_times) + 1) / len(sorted_times) # compute the cumulative fraction of particles arrived at the well as a function of travel time (sorted_times).
 
 fig, ax = plt.subplots(figsize=(7, 4))
 ax.plot(sorted_times, cumulative_fraction, 'k-', lw=2)
@@ -409,7 +410,7 @@ ax.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# --- 3. Histogram of arrival times ---
+# 3 Histogram of arrival times 
 fig, ax = plt.subplots(figsize=(7, 4))
 ax.hist(arrival_years, bins=20, edgecolor='k', alpha=0.7)
 ax.set_xlabel("Travel time (years)")
@@ -419,7 +420,7 @@ ax.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# --- 4. Trace lengths and velocities summary plot ---
+# 4 Trace lengths and velocities summary plot
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
 axes[0].bar(range(len(trace_lengths)), trace_lengths, color='steelblue')
