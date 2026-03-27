@@ -1,37 +1,48 @@
 # Here we build the rotation of the box 
 import numpy as np
 
-def calc_conductivity(k, theta, direction='x'):
+def calc_conductivity(k, theta, direction):
     
     # Convert theta to radians
-    theta_rad = np.radians(theta)
+    theta_radians = np.radians(theta)
     
-    # Calculate the effective conductivity using the rule of mixtures
-    k_eff = k * (np.cos(theta_rad)**2 + np.sin(theta_rad)**2) * (1-np.random.rand()/5)  # Adding some randomness to simulate variability
+    # Calculate the effective conductivity 
+    k_eff = k * (np.cos(theta_radians)**2 + np.sin(theta_radians)**2) * (1-np.random.rand()/5)  # Adding some randomness to simulate variability
     
     return k_eff
 
 rotations = [0, 15, 30, 45, 60, 75]
 
-pntsx = []
-pnty = []
+def compute_conductivity_points(k, rotations):
+    points_x_pos = []
+    points_y_pos = []
+    points_x_neg = []
+    points_y_neg = []
 
-#TODO: wirte into a function
-#TODO: only rotate 4 times
-for r in rotations:
-    kx = calc_conductivity(1, r, direction='x')
-    kx_vec = np.exp(1j * np.radians(r))
-    kxm = calc_conductivity(1, r+180, direction='x')
-    ky = calc_conductivity(1, r, direction='y')
-    ky_vec = np.exp(1j * np.radians(r + 90))
-    pntsx.append(kx * kx_vec)
-    pnty.append(ky * ky_vec)
-    
-# TODO: plot
+    for angle in rotations:
+        kx = calc_conductivity(k, angle, direction='x') # conductivity in the x-direction
+        kx_dir = np.exp(1j * np.radians(angle)) # direction of the conductivity in the complex plane
+        kx_neg = calc_conductivity(k, angle + 180, direction='x') # conductivity in the opposite direction for x
+        kx_neg_dir = np.exp(1j * np.radians(angle + 180)) # direction of the conductivity in the complex plane for the opposite direction for x
+        ky = calc_conductivity(k, angle, direction='y') # conductivity in the y-direction
+        ky_dir = np.exp(1j * np.radians(angle + 90)) # direction of the conductivity in the complex plane for the y-direction
+        ky_neg = calc_conductivity(k, angle + 270, direction='y') # conductivity in the opposite direction for y
+        ky_neg_dir = np.exp(1j * np.radians(angle + 270)) # direction of the conductivity in the complex plane for the opposite direction for y
+        points_x_pos.append(kx * kx_dir) # effective conductivity in the x-direction
+        points_y_pos.append(ky * ky_dir) # effective conductivity in the y-direction
+        points_x_neg.append(kx_neg * kx_neg_dir) # effective conductivity in the opposite direction for x
+        points_y_neg.append(ky_neg * ky_neg_dir) # effective conductivity in the opposite direction for y
+
+    return points_x_pos, points_y_pos, points_x_neg, points_y_neg
+
+points_x_pos, points_y_pos, points_x_neg, points_y_neg = compute_conductivity_points(1, rotations)
+
 import matplotlib.pyplot as plt
 plt.figure(figsize=(6, 6))
-plt.plot(np.real(pntsx), np.imag(pntsx), 'o-', label='Effective Conductivity')
-plt.plot(np.real(pnty), np.imag(pnty), 's-', label='Effective Conductivity (y)')
+plt.plot(np.real(points_x_pos), np.imag(points_x_pos), 'o-', label='Effective Conductivity (x)')
+plt.plot(np.real(points_y_pos), np.imag(points_y_pos), 's-', label='Effective Conductivity (y)')
+plt.plot(np.real(points_x_neg), np.imag(points_x_neg), 'o-', label='Effective Conductivity (-x)')
+plt.plot(np.real(points_y_neg), np.imag(points_y_neg), 's-', label='Effective Conductivity (-y)')
 plt.xlabel('Conductivity in x-direction')
 plt.ylabel('Conductivity in y-direction')
 plt.title('Effective Conductivity with Rotation')
