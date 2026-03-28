@@ -22,12 +22,22 @@ def compute_conductivity_points(k, rotations):
     for angle in rotations:
         kx = calc_conductivity(k, angle, direction='x') # conductivity in the x-direction
         kx_dir = np.exp(1j * np.radians(angle)) # direction of the conductivity in the complex plane
+        
         kx_neg = calc_conductivity(k, angle + 180, direction='x') # conductivity in the opposite direction for x
         kx_neg_dir = np.exp(1j * np.radians(angle + 180)) # direction of the conductivity in the complex plane for the opposite direction for x
+        
         ky = calc_conductivity(k, angle, direction='y') # conductivity in the y-direction
         ky_dir = np.exp(1j * np.radians(angle + 90)) # direction of the conductivity in the complex plane for the y-direction
+        
         ky_neg = calc_conductivity(k, angle + 270, direction='y') # conductivity in the opposite direction for y
         ky_neg_dir = np.exp(1j * np.radians(angle + 270)) # direction of the conductivity in the complex plane for the opposite direction for y
+        
+        print (f"Angle: {angle} degrees")
+        print (f"  kx: {kx:.3f}, direction: {np.degrees(np.angle(kx_dir)):.1f} degrees")
+        print (f"  kx_neg: {kx_neg:.3f}, direction: {np.degrees(np.angle(kx_neg_dir)):.1f} degrees")
+        print (f"  ky: {ky:.3f}, direction: {np.degrees(np.angle(ky_dir)):.1f} degrees")
+        print (f"  ky_neg: {ky_neg:.3f}, direction: {np.degrees(np.angle(ky_neg_dir)):.1f} degrees")
+
         points_x_pos.append(kx * kx_dir) # effective conductivity in the x-direction
         points_y_pos.append(ky * ky_dir) # effective conductivity in the y-direction
         points_x_neg.append(kx_neg * kx_neg_dir) # effective conductivity in the opposite direction for x
