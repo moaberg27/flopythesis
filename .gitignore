@@ -54,6 +54,7 @@ cover/
 #files 
 /csv_files/
 /images/
+/flopy_env/
 
 # Translations
 *.mo
