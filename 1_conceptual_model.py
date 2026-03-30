@@ -56,7 +56,7 @@ class ConceptualModelConfig:
 
     # Runtime controls
     simulation_name: str = "conceptual"
-    mf6_exe_name: str = "mf6"
+    mf6_exe_name: str = "mf6.exe"
     run_simulation: bool = True
     max_cells_for_run: int = 2_000_000
 
