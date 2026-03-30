@@ -62,3 +62,61 @@ plt.xlim(-1.5, 1.5)
 plt.ylim(-1.5, 1.5)
 plt.grid()
 plt.show()
+
+# Fit 2D conductivity tensor from the 24 directional measurements 
+# Each measurement satisfies: k_i = Kxx*cos²θ + 2*Kxy*cosθ*sinθ + Kyy*sin²θ
+
+angles = []   # global measurement angles [rad]
+k_meas = []   # measured conductivity magnitudes
+
+for i, alpha in enumerate(rotations): # rotations (0, 15, 30, 45, 60, 75 degrees)
+    # +x direction: global angle = alpha
+    angles.append(np.radians(alpha)) 
+    k_meas.append(abs(points_x_pos[i]))
+
+    # -x direction: global angle = alpha + 180
+    angles.append(np.radians(alpha + 180))
+    k_meas.append(abs(points_x_neg[i]))
+
+    # +y direction: global angle = alpha + 90
+    angles.append(np.radians(alpha + 90))
+    k_meas.append(abs(points_y_pos[i]))
+
+    # -y direction: global angle = alpha + 270
+    angles.append(np.radians(alpha + 270))
+    k_meas.append(abs(points_y_neg[i]))
+
+angles = np.array(angles) 
+k_meas = np.array(k_meas)
+
+# Build design matrix A so that A @ [Kxx, Kxy, Kyy] = k_meas
+A = np.column_stack([
+    np.cos(angles)**2,
+    2 * np.cos(angles) * np.sin(angles),
+    np.sin(angles)**2,
+])
+
+result, _, _, _ = np.linalg.lstsq(A, k_meas, rcond=None)
+Kxx, Kxy, Kyy = result
+
+K_tensor = np.array([[Kxx, Kxy],
+                     [Kxy, Kyy]])
+
+# Principal values and orientation via eigendecomposition
+eigvals, eigvecs = np.linalg.eigh(K_tensor)
+order = np.argsort(eigvals)[::-1]
+eigvals = eigvals[order]
+eigvecs = eigvecs[:, order]
+principal_angle = np.degrees(np.arctan2(eigvecs[1, 0], eigvecs[0, 0]))
+
+# RMSE: how well the 24 points fit an ellipse (0 = perfect continuum)
+k_pred = A @ result
+rmse = np.sqrt(np.mean((k_meas - k_pred)**2))
+
+print("\n--- Fitted 2D conductivity tensor ---")
+print(f"  K = [[{Kxx:.4e}, {Kxy:.4e}],")
+print(f"       [{Kxy:.4e}, {Kyy:.4e}]]")
+print(f"  Principal values: k1 = {eigvals[0]:.4e}, k2 = {eigvals[1]:.4e}")
+print(f"  Principal angle:  {principal_angle:.2f} deg")
+print(f"  RMSE residual:    {rmse:.4e}  (0 = perfect ellipse)")
+
