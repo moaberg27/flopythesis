@@ -1,3 +1,4 @@
+conceptual_workspace
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -57,6 +58,7 @@ cover/
 /flopy_env/
 /cube/
 /tunneldata/
+
 
 # Translations
 *.mo
