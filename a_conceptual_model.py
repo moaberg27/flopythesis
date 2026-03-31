@@ -342,15 +342,34 @@ def plot_conceptual_model(cfg: ConceptualModelConfig) -> None:
     center_marker = pv.Sphere(radius=1.0, center=cfg.center)
     tunnel_mesh = build_tunnel_mesh(cfg)
 
+    # Create off-screen plotter to save screenshot
+    p_save = pv.Plotter(off_screen=True)
+    p_save.add_mesh(cube, color="lightskyblue", opacity=0.25, show_edges=True)
+    p_save.add_mesh(cell_lines, color="midnightblue",
+                    line_width=0.7, opacity=0.8)
+    p_save.add_mesh(center_marker, color="crimson")
+    if tunnel_mesh is not None:
+        p_save.add_mesh(tunnel_mesh, color="red",
+                        opacity=0.6, show_edges=False)
+    p_save.add_axes()
+    apply_equal_axes(p_save, cube.bounds)
+    p_save.view_isometric()
+
+    # Save screenshot
+    images_folder = Path.cwd() / "images"
+    images_folder.mkdir(parents=True, exist_ok=True)
+    output_path = images_folder / "conceptual_model.png"
+    p_save.screenshot(output_path)
+    print(f"Saved conceptual model visualization to: {output_path}")
+    p_save.close()
+
+    # Create interactive plotter for viewing
     p = pv.Plotter()
     p.add_mesh(cube, color="lightskyblue", opacity=0.25, show_edges=True)
     p.add_mesh(cell_lines, color="midnightblue", line_width=0.7, opacity=0.8)
     p.add_mesh(center_marker, color="crimson")
-
-    # Add tunnel if it was successfully loaded
     if tunnel_mesh is not None:
         p.add_mesh(tunnel_mesh, color="red", opacity=0.6, show_edges=False)
-
     p.add_axes()
     apply_equal_axes(p, cube.bounds)
     p.view_isometric()

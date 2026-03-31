@@ -58,6 +58,8 @@ cover/
 /flopy_env/
 /cube/
 /tunneldata/
+/conceptm_gridgen/
+/conceptm_grid_workspace/
 
 
 # Translations
