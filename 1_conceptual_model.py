@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import flopy
+import geopandas as gpd
 import numpy as np
 import pyvista as pv
+from shapely.geometry import Polygon
 
 
 @dataclass
@@ -104,7 +106,8 @@ def build_initial_heads(cfg: ConceptualModelConfig, x_centers: np.ndarray) -> np
 
     if cfg.initial_condition_mode == "linear_x":
         x_norm = np.clip((x_centers - cfg.x_origin) / cfg.length_x, 0.0, 1.0)
-        head_line = cfg.initial_head_left + (cfg.initial_head_right - cfg.initial_head_left) * x_norm
+        head_line = cfg.initial_head_left + \
+            (cfg.initial_head_right - cfg.initial_head_left) * x_norm
         head_2d = np.tile(head_line, (cfg.nrow, 1))
         return np.tile(head_2d[np.newaxis, :, :], (cfg.nlay, 1, 1))
 
@@ -130,7 +133,8 @@ def build_flopy_model(cfg: ConceptualModelConfig, workspace: Path) -> tuple[flop
     )
     flopy.mf6.ModflowIms(sim, pname="ims", complexity="SIMPLE")
 
-    gwf = flopy.mf6.ModflowGwf(sim, modelname=cfg.simulation_name, save_flows=True)
+    gwf = flopy.mf6.ModflowGwf(
+        sim, modelname=cfg.simulation_name, save_flows=True)
 
     botm = cfg.top - np.arange(1, cfg.nlay + 1, dtype=float) * cfg.delv
     flopy.mf6.ModflowGwfdis(
@@ -146,7 +150,8 @@ def build_flopy_model(cfg: ConceptualModelConfig, workspace: Path) -> tuple[flop
         yorigin=cfg.y_origin,
     )
 
-    x_centers = cfg.x_origin + (np.arange(cfg.ncol, dtype=float) + 0.5) * cfg.delr
+    x_centers = cfg.x_origin + \
+        (np.arange(cfg.ncol, dtype=float) + 0.5) * cfg.delr
     strt = build_initial_heads(cfg, x_centers)
     flopy.mf6.ModflowGwfic(gwf, strt=strt)
 
@@ -256,24 +261,101 @@ def apply_equal_axes(plotter: pv.Plotter, bounds: tuple[float, float, float, flo
     zmid = 0.5 * (zmin + zmax)
 
     max_len = max(xmax - xmin, ymax - ymin, zmax - zmin)
-    equal_box = pv.Cube(center=(xmid, ymid, zmid), x_length=max_len, y_length=max_len, z_length=max_len)
+    equal_box = pv.Cube(center=(xmid, ymid, zmid),
+                        x_length=max_len, y_length=max_len, z_length=max_len)
     plotter.add_mesh(equal_box.outline(), color="black", line_width=1.0)
 
 
+def build_tunnel_mesh(cfg: ConceptualModelConfig, tunnel_shapefile: str = "tunneldata/tunnel.shp") -> pv.PolyData | None:
+    """Load tunnel from shapefile and create a 3D mesh.
+
+    Returns a PyVista mesh or None if shapefile doesn't exist.
+    The tunnel is extruded vertically at its center depth.
+    """
+    tunnel_path = Path(tunnel_shapefile)
+    if not tunnel_path.exists():
+        return None
+
+    # Load shapefile
+    gdf = gpd.read_file(tunnel_path)
+    if gdf.empty:
+        return None
+
+    # Get tunnel geometry (should be a polygon from buffered line)
+    tunnel_geom = gdf.geometry.iloc[0]
+    tunnel_depth_m = gdf['depth_m'].iloc[0]
+    tunnel_radius_m = gdf['radius_m'].iloc[0]
+
+    # Convert polygon boundary to points
+    if isinstance(tunnel_geom, Polygon):
+        # exclude last point (repeat of first)
+        coords = np.array(tunnel_geom.exterior.coords[:-1])
+    else:
+        return None
+
+    # Create extruded (3D) tunnel by repeating points at top and bottom
+    # Tunnel centerline is at depth tunnel_depth_m, so z = cfg.top - tunnel_depth_m
+    z_center = cfg.top - tunnel_depth_m
+    # extrude by tunnel radius (simplified: cone-like)
+    z_radius = tunnel_radius_m
+
+    z_top = z_center + z_radius
+    z_bottom = z_center - z_radius
+
+    # Bottom points (at z_bottom)
+    bottom_points = np.column_stack(
+        [coords[:, 0], coords[:, 1], np.full(len(coords), z_bottom)])
+    # Top points (at z_top)
+    top_points = np.column_stack(
+        [coords[:, 0], coords[:, 1], np.full(len(coords), z_top)])
+
+    # Combine all points
+    all_points = np.vstack([bottom_points, top_points])
+    n_side = len(coords)
+
+    # Create faces (quads connecting bottom and top)
+    faces = []
+    for i in range(n_side):
+        i_next = (i + 1) % n_side
+        # Quad: bottom[i], bottom[i_next], top[i_next], top[i]
+        faces.append([4, i, i_next, i_next + n_side, i + n_side])
+
+    # Create surface (bottom cap)
+    bottom_face = [n_side] + list(range(n_side))
+    faces.append(bottom_face)
+
+    # Create surface (top cap)
+    top_face = [n_side] + list(range(n_side, 2 * n_side))[::-1]
+    faces.append(top_face)
+
+    # Convert faces to PyVista format
+    faces_array = np.concatenate([np.array(f, dtype=int) for f in faces])
+
+    mesh = pv.PolyData(all_points, faces_array)
+    return mesh
+
+
 def plot_conceptual_model(cfg: ConceptualModelConfig) -> None:
-    """Plot transparent conceptual cube with center marker and coordinate axes."""
+    """Plot transparent conceptual cube with center marker, tunnel, and coordinate axes."""
     cube = build_visual_cube(cfg)
     cell_lines = build_surface_cell_lines(cfg)
     center_marker = pv.Sphere(radius=1.0, center=cfg.center)
+    tunnel_mesh = build_tunnel_mesh(cfg)
 
     p = pv.Plotter()
     p.add_mesh(cube, color="lightskyblue", opacity=0.25, show_edges=True)
     p.add_mesh(cell_lines, color="midnightblue", line_width=0.7, opacity=0.8)
     p.add_mesh(center_marker, color="crimson")
+
+    # Add tunnel if it was successfully loaded
+    if tunnel_mesh is not None:
+        p.add_mesh(tunnel_mesh, color="red", opacity=0.6, show_edges=False)
+
     p.add_axes()
     apply_equal_axes(p, cube.bounds)
     p.view_isometric()
-    p.show(title="Conceptual Model (Transparent Cube)")
+    tunnel_title = " (with Tunnel)" if tunnel_mesh is not None else ""
+    p.show(title=f"Conceptual Model{tunnel_title}")
 
 
 def main() -> None:
@@ -303,7 +385,8 @@ def main() -> None:
 
         success, buff = sim.run_simulation(silent=False, report=True)
         if not success:
-            raise RuntimeError("MODFLOW 6 run failed:\n" + "\n".join(str(x) for x in buff))
+            raise RuntimeError("MODFLOW 6 run failed:\n" +
+                               "\n".join(str(x) for x in buff))
         print("Simulation completed successfully.")
 
     plot_conceptual_model(cfg)
