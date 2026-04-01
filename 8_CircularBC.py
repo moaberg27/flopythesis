@@ -316,8 +316,157 @@ p = fp.utils.PathlineFile(mppth_path)
 for i in range(p.get_maxid() + 1):
     pi = p.get_data(partid=i)
     plt.plot(pi['x'], pi['y'], 'C1', lw=1)
+    plt.text(pi['x'][-1], pi['y'][-1], str(i), fontsize=7, ha='center', va='bottom')
 
 plt.title("Pathlines from the Well (Backward)")
 plt.xlabel("X (m)")
 plt.ylabel("Y (m)")
+plt.show()
+
+
+# Numerical BTC from MODPATH
+
+# MODPATH already computes travel times along each pathline using
+# the velocity field and porosity. For backward tracking the
+# recorded time at the last waypoint of each particle equals
+# the total travel time from its recharge location to the well.
+
+# 1 Extract arrival times and trace lengths per particle 
+arrival_times = []   # total travel time per particle [days]
+trace_lengths = []   # total path length per particle  [m]
+particle_velocities = []  # mean pore velocity per particle [m/d]
+ending_radii = []    # radial distance of last waypoint from well [m]
+
+fname = os.path.join(modelws, f"{modelname}_abs_wells_bw.mppth")
+p = fp.utils.PathlineFile(fname)
+
+# Loop over all particles and extract their pathline data to compute total travel time, path length, and mean velocity.
+# Each particle's pathline is represented as a sequence of waypoints (MODPATH records a new waypoint every time a particle crosses a cell boundary) 
+# with coordinates and travel times. 
+# We compute the total path length by summing the distances between consecutive waypoints. 
+# The total travel time is given by the time at the last waypoint. 
+# The mean pore velocity is then calculated as total path length divided by total travel time.
+
+for pid in range(p.get_maxid() + 1): # loop over all particle IDs
+    pi = p.get_data(partid=pid) # get pathline data for particle with ID 'pid' (returns a structured array with fields like 'x', 'y', 'z', 'time', etc.)
+    if len(pi) < 2: # skip particles with less than 2 waypoints (no meaningful pathline)
+        continue
+
+    # Coordinates along the pathline
+    xp = pi['x'] # x-coordinates of the pathline waypoints
+    yp = pi['y'] # y-coordinates of the pathline waypoints
+
+    # Segment lengths and cumulative path length
+    dx = np.diff(xp) # differences in x-coordinates between consecutive waypoints
+    dy = np.diff(yp) # differences in y-coordinates between consecutive waypoints
+    seg_lengths = np.sqrt(dx**2 + dy**2) # Euclidean distances between consecutive waypoints
+    total_length = np.sum(seg_lengths) # total pathline length
+
+    # Travel time recorded by MODPATH (last waypoint)
+    total_time = pi['time'][-1]          # [days]
+
+    # Ending radius: distance from well centre to last waypoint (boundary location)
+    r_end = np.sqrt((xp[-1] - circle_center_x)**2 + (yp[-1] - circle_center_y)**2)
+    ending_radii.append(r_end)
+
+    arrival_times.append(total_time) # append total travel time for this particle to the list
+    trace_lengths.append(total_length) # append total path length for this particle to the list
+    if total_time > 0: # compute mean pore velocity as total path length divided by total travel time, and append to the list
+        particle_velocities.append(total_length / total_time)  # [m/d]
+    else:
+        particle_velocities.append(np.nan)
+
+arrival_times = np.array(arrival_times) # convert lists to numpy arrays for easier analysis and plotting
+trace_lengths = np.array(trace_lengths) # convert lists to numpy arrays for easier analysis and plotting
+particle_velocities = np.array(particle_velocities) # convert lists to numpy arrays for easier analysis and plotting
+ending_radii = np.array(ending_radii)
+
+# Print summary
+print(f"\nNumber of particles : {len(arrival_times)}") 
+print(f"Arrival times [years]: min={arrival_times.min()/365.25:.1f}, "
+      f"max={arrival_times.max()/365.25:.1f}, mean={arrival_times.mean()/365.25:.1f}")
+print(f"Trace lengths [m]  : min={trace_lengths.min():.1f}, "
+      f"max={trace_lengths.max():.1f}, mean={trace_lengths.mean():.1f}")
+print(f"Mean velocities [m/d]: min={np.nanmin(particle_velocities):.4f}, "
+      f"max={np.nanmax(particle_velocities):.4f}")
+
+# Convert to years for readability
+arrival_years = arrival_times / 365.25
+
+# 2 Breakthrough curve (cumulative fraction vs time) 
+sorted_times = np.sort(arrival_years) # sort the arrival times in ascending order, from smallest to largest, to prepare for plotting the breakthrough curve (cumulative fraction of particles arrived vs travel time)
+cumulative_fraction = np.arange(1, len(sorted_times) + 1) / len(sorted_times) # compute the cumulative fraction of particles arrived at the well as a function of travel time (sorted_times).
+
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.plot(sorted_times, cumulative_fraction, 'k-', lw=2)
+ax.set_xlabel("Travel time (years)")
+ax.set_ylabel("Cumulative fraction of particles arrived")
+ax.set_title("Numerical BTC at the Well (MODPATH)")
+ax.set_xlim(left=0)
+ax.set_ylim(0, 1.05)
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+
+# Analytical BTC radial flow to a well in a circular confined (?) aquifer
+b = top - botm[0]  # aquifer thickness [m]
+
+# Per-particle analytical travel time using each particle's actual ending radius
+t_analytical = (np.pi * b * porosity / abs(Q_well)) * (ending_radii**2 - r_ring**2)  # [days]
+t_analytical_years = t_analytical / 365.25
+
+# Analytical BTC (cumulative fraction vs time)
+sorted_analytical = np.sort(t_analytical_years)
+cum_frac_analytical = np.arange(1, len(sorted_analytical) + 1) / len(sorted_analytical)
+
+print(f"\nAnalytical travel times [years]: "
+      f"min={t_analytical_years.min():.2f}, "
+      f"max={t_analytical_years.max():.2f}, "
+      f"mean={t_analytical_years.mean():.2f}")
+
+# Comparison plot: numerical vs analytical BTC
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.plot(sorted_times, cumulative_fraction, 'k-', lw=2, label='Numerical (MODPATH)')
+ax.plot(sorted_analytical, cum_frac_analytical, 'r--', lw=2, label='Analytical (radial)')
+ax.set_xlabel("Travel time (years)")
+ax.set_ylabel("Cumulative fraction of particles arrived")
+ax.set_title("BTC Comparison: Numerical vs Analytical")
+ax.set_xlim(left=0)
+ax.set_ylim(0, 1.05)
+ax.legend()
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+
+# Relative error per particle
+rel_error = np.abs(arrival_times - t_analytical) / t_analytical * 100
+print(f"Relative error [%]: min={rel_error.min():.2f}, "
+      f"max={rel_error.max():.2f}, mean={rel_error.mean():.2f}")
+
+# 3 Histogram of arrival times 
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.hist(arrival_years, bins=20, edgecolor='k', alpha=0.7)
+ax.set_xlabel("Travel time (years)")
+ax.set_ylabel("Number of particles")
+ax.set_title("Distribution of Numerical Arrival Times (MODPATH)")
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# 4 Trace lengths and velocities summary plot
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+axes[0].bar(range(len(trace_lengths)), trace_lengths, color='steelblue')
+axes[0].set_xlabel("Particle ID")
+axes[0].set_ylabel("Trace length (m)")
+axes[0].set_title("Numerical Pathline Lengths (MODPATH)")
+
+axes[1].bar(range(len(particle_velocities)), particle_velocities, color='coral')
+axes[1].set_xlabel("Particle ID")
+axes[1].set_ylabel("Mean pore velocity (m/d)")
+axes[1].set_title("Numerical Mean Pore Velocities (MODPATH)")
+
+plt.tight_layout()
 plt.show()

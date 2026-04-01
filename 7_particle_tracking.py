@@ -44,14 +44,14 @@ workspace = Path(temp_dir.name)
 
 # Creation of the model grid
 Lx = 10000.0
-Ly = 10500.0
+Ly = 10000.0
 nlay = 3
-nrow = 21
+nrow = 20
 ncol = 20
 delr = Lx / ncol
 delc = Ly / nrow
 top = 400
-botm = [220, 200, 0]
+botm = [250, 200, 0]
 ms = flopy.modflow.Modflow(exe_name=str(mf_exe))
 dis5 = flopy.modflow.ModflowDis(
     ms,
@@ -176,7 +176,7 @@ sim = flopy.mf6.MFSimulation(
 )
 
 # create tdis package
-tdis_rc = [(1000.0, 1, 1.0)]
+tdis_rc = [(1.0, 1, 1.0)] # (length of time step, number of steps, time step multiplier)
 tdis = flopy.mf6.ModflowTdis(
     sim, pname="tdis", time_units="DAYS", perioddata=tdis_rc
 )
@@ -219,15 +219,15 @@ disv = flopy.mf6.ModflowGwfdisv(
 )
 
 # initial conditions
-ic = flopy.mf6.ModflowGwfic(gwf, pname="ic", strt=320.0)
+ic = flopy.mf6.ModflowGwfic(gwf, pname="ic", strt=300.0)
 
 # node property flow
 npf = flopy.mf6.ModflowGwfnpf(
     gwf,
     xt3doptions=[("xt3d")],
-    icelltype=[1, 0, 0],
-    k=[50.0, 0.01, 200.0],
-    k33=[10.0, 0.01, 20.0],
+    icelltype=[1, 0, 0], # layer 1 is convertible, layers 2 and 3 are confined
+    k=[50.0, 0.01, 200.0], # horizontal conductivity for layers 1, 2, and 3
+    k33=[10.0, 0.01, 20.0], # vertical conductivity for layers 1, 2, and 3
 )
 
 # well
@@ -235,22 +235,53 @@ wellpoints = [(4750.0, 5250.0)]
 welcells = g.intersect(wellpoints, "point", 0)
 
 # welspd = flopy.mf6.ModflowGwfwel.stress_period_data.empty(gwf, maxbound=1, aux_vars=['iface'])
-welspd = [[(2, icpl), -150000, 0] for icpl in welcells["nodenumber"]]
+welspd = [[(2, icpl), -1000, 0] for icpl in welcells["nodenumber"]]
 wel = flopy.mf6.ModflowGwfwel(
     gwf, print_input=True, auxiliary=[("iface",)], stress_period_data=welspd
 )
 
-# recharge
-aux = [np.ones(ncpl, dtype=int) * 6]
-rch = flopy.mf6.ModflowGwfrcha(
-    gwf, recharge=0.005, auxiliary=[("iface",)], aux={0: [6]}
-)
+# constant head boundary conditions on all 4 sides
+h1 = 300.0  # left   (x = 0)
+h2 = 300.0  # right  (x = Lx)
+#h3 = 320.0  # bottom (y = 0)
+#h4 = 320.0  # top    (y = Ly)
 
-# river
-riverline = [[(Lx - 1.0, Ly), (Lx - 1.0, 0.0)]]
-rivcells = g.intersect(riverline, "line", 0)
-rivspd = [[(0, icpl), 320.0, 100000.0, 318] for icpl in rivcells["nodenumber"]]
-riv = flopy.mf6.ModflowGwfriv(gwf, stress_period_data=rivspd)
+# Identify boundary cells (outermost ring of cells) for each layer.
+# On a quadtree DISV grid cell centres are offset inward by half the cell
+# width, so we use delr/2 and delc/2 as tolerances to capture the first
+# column/row of cells regardless of refinement level.
+# cell2d format: [icell2d, xc, yc, ncvert, iv1, iv2, ...]
+xc = np.array([c[1] for c in cell2d])  # cell-centre x
+yc = np.array([c[2] for c in cell2d])  # cell-centre y
+
+left_cells   = np.where(xc <= delr / 2)[0]
+right_cells  = np.where(xc >= Lx - delr / 2)[0]
+bottom_cells = np.where(yc <= delc / 2)[0]
+top_cells    = np.where(yc >= Ly - delc / 2)[0]
+
+chdspd = []
+seen = set()
+for lay in range(nlay):
+    for icpl in left_cells:
+        if (lay, icpl) not in seen:
+            seen.add((lay, icpl))
+            chdspd.append([(lay, icpl), h1])
+    for icpl in right_cells:
+        if (lay, icpl) not in seen:
+            seen.add((lay, icpl))
+            chdspd.append([(lay, icpl), h2])
+    #for icpl in bottom_cells:
+        #if (lay, icpl) not in seen:
+            #seen.add((lay, icpl))
+            #chdspd.append([(lay, icpl), h3])
+    #for icpl in top_cells:
+        #if (lay, icpl) not in seen:
+            #seen.add((lay, icpl))
+            #chdspd.append([(lay, icpl), h4])
+
+chd = flopy.mf6.ModflowGwfchd(gwf, stress_period_data=chdspd)
+
+chd_cells = np.unique(np.concatenate([left_cells, right_cells, bottom_cells, top_cells]))
 
 # output control
 oc = flopy.mf6.ModflowGwfoc(
@@ -266,9 +297,9 @@ oc = flopy.mf6.ModflowGwfoc(
 sim.write_simulation()
 
 success, buff = sim.run_simulation(silent=True, report=True)
-assert success, "mf6 failed to run"
 for line in buff:
     print(line)
+assert success, "mf6 failed to run"
 
 # Import and plot the results
 fname = os.path.join(model_ws, model_name + ".disv.grb")
@@ -276,7 +307,7 @@ grd = flopy.mf6.utils.MfGrdFile(fname, verbose=False)
 mg = grd.modelgrid
 ibd = np.zeros((ncpl), dtype=int)
 ibd[welcells["nodenumber"]] = 1
-ibd[rivcells["nodenumber"]] = 2
+ibd[chd_cells] = 2
 ibd = np.ma.masked_equal(ibd, 0)
 fig = plt.figure(figsize=(8, 8), constrained_layout=True)
 ax = fig.add_subplot(1, 1, 1, aspect="equal")
@@ -397,8 +428,8 @@ mp_nameb = model_name + "b_mp"
 pcoord = np.array(
     [
         [0.000, 0.125, 0.500],
-        [0.000, 0.375, 0.500],
-        [0.000, 0.625, 0.500],
+        [0.000, 0.375, 0.500], 
+        [0.000, 0.625, 0.500], 
         [0.000, 0.875, 0.500],
         [1.000, 0.125, 0.500],
         [1.000, 0.375, 0.500],
@@ -491,8 +522,18 @@ if not success:
 for line in buff:
     print(line)
 
+# Fix Fortran-style floats missing the 'E' (e.g. "0.123-111" -> "0.123E-111")
+import re
+
+def _fix_fortran_floats(fpath):
+    raw = fpath.read_text()
+    fixed = re.sub(r'(\d)(\-)(\d)', r'\1E\2\3', raw)
+    fixed = re.sub(r'(\d)(\+)(\d)', r'\1E\2\3', fixed)
+    fpath.write_text(fixed)
+
 # Load the endpoint data
 fpth = model_ws / f"{mp_namea}.mpend"
+_fix_fortran_floats(fpth)
 e = flopy.utils.EndpointFile(fpth)
 e0 = e.get_alldata()
 
@@ -525,6 +566,7 @@ import numpy as np
 
 # Load the pathlines produced by MODPATH
 pathline_file = model_ws / f"{mp_namea}.mppth"
+_fix_fortran_floats(pathline_file)
 pf = PathlineFile(pathline_file)
 pl = pf.get_alldata()
 

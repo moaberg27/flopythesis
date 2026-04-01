@@ -39,10 +39,8 @@ idomain = np.ones((nlay, nrow, ncol), dtype=int)
 
 # Boundary conditions
 Q_well = -5000
-h1 = 200   # left edge
-h2 = 200   # right edge
-h3 = 200   # top edge
-h4 = 200   # bottom edge
+h1 = 250   # diagonal from (0,0) to (Lx,Ly)
+h2 = 150   # diagonal from (0,Ly) to (Lx,0)
 
 # Create the Simulation
 exe_name = str(_proj_root / "mf6.exe")
@@ -102,21 +100,26 @@ ic = fp.mf6.ModflowGwfic(gwf,
                          )
 
 
-# Specified Head Package: apply constant head to all outer edges, but avoid duplicate corners
+# Specified Head Package: constant head along two parallel diagonal bands
+# Band 1 (upper-left):  line y = x + Ly/2, from (0, Ly/2) to (Lx/2, Ly), head = h1
+# Band 2 (lower-right): line y = x - Ly/2, from (Lx/2, 0) to (Lx, Ly/2), head = h2
+# The two bands are parallel (slope = 1), on opposite sides of the domain.
 chd_spd = []
+diag_tol = max(delr, delc)  # tolerance band width [m]
+offset = Ly / 2.0
 for k in range(nlay):
-    # Left edge (excluding corners)
-    for r in range(1, nrow-1):
-        chd_spd.append([(k, r, 0), h1])
-    # Right edge (excluding corners)
-    for r in range(1, nrow-1):
-        chd_spd.append([(k, r, ncol-1), h2])
-    # Top edge (all columns, row 0)
-    for c in range(ncol):
-        chd_spd.append([(k, 0, c), h3])
-    # Bottom edge (all columns, last row)
-    for c in range(ncol):
-        chd_spd.append([(k, nrow-1, c), h4])
+    for r in range(nrow):
+        for c in range(ncol):
+            xc = (c + 0.5) * delr
+            yc = Ly - (r + 0.5) * delc  # row 0 is at y = Ly
+            # Distance to band 1: y = x + offset  ->  |yc - xc - offset| / sqrt(2)
+            dist1 = abs(yc - xc - offset) / np.sqrt(2)
+            # Distance to band 2: y = x - offset  ->  |yc - xc + offset| / sqrt(2)
+            dist2 = abs(yc - xc + offset) / np.sqrt(2)
+            if dist1 <= diag_tol:
+                chd_spd.append([(k, r, c), h1])
+            elif dist2 <= diag_tol:
+                chd_spd.append([(k, r, c), h2])
 
 chd = fp.mf6.ModflowGwfchd(gwf, 
                            stress_period_data=chd_spd,
@@ -174,7 +177,7 @@ print(f"max head: {np.ma.max(active_heads)}, min head: {np.ma.min(active_heads)}
 pmv = fp.plot.PlotMapView(model=gwf)
 qm = pmv.plot_array(head_lay1_plot)
 plt.colorbar(qm, shrink=0.5, label='Head (m)')
-cs = pmv.contour_array(head_lay1_plot, levels=range(100, 500, 5), linewidths=1, colors='k') 
+cs = pmv.contour_array(head_lay1_plot, levels=range(99, 249, 5), linewidths=1, colors='k') 
 plt.clabel(cs, fmt='%1.0f')
 plt.title("Head Contours for Layer 1")
 
@@ -316,7 +319,7 @@ with open(mppth_path, 'w') as f:
 #Read And Plot Pathlines​
 
 pmv = fp.plot.PlotMapView(model=gwf)#create a map view plot of the groundwater flow model​
-pmv.contour_array(head_lay1_plot, levels=range(100, 500, 5), colors='C0') # add contours of the head distribution​
+pmv.contour_array(head_lay1_plot, levels=range(99, 249, 5), colors='C0') # add contours of the head distribution​
 fname = os.path.join(modelws, f"{modelname}_abs_wells_bw.mppth") # path to the MODPATH output file ​
 p = fp.utils.PathlineFile(fname) # read the pathline file​
 
