@@ -60,7 +60,11 @@ cover/
 /tunneldata/
 /conceptm_gridgen/
 /conceptm_grid_workspace/
-
+/_tmp_base/
+/continuum_ws/
+/cube_rotation_workspace/
+/mf6_cube/
+/mf6lake/
 
 # Translations
 *.mo
