@@ -9,6 +9,12 @@ Concept mirrors the 2D workflow:
 
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+CSV_DIR = ROOT / "csv_files"
+TENSOR_EXPORT_PATH = CSV_DIR / "tensor_sim_one.csv"
 
 
 def rotation_matrix_zxy(z_deg, x_deg, y_deg):
@@ -111,6 +117,10 @@ def mock_dfn(rotation_deg, noise=0.10):
         noisy_k(-ez),
     )
 
+# test with isotropic tensor (should give same K in all directions)
+#def mock_dfn(rotation_deg):
+ #   k_iso = 1.5
+ #   return (3, 3, k_iso, 3, k_iso, 5)
 
 # Run mock DFN for all rotations and store results
 for rot in rotations_3d:
@@ -264,6 +274,53 @@ elif rel_rmse < 15:
 else:
     print("  --> Poor fit: continuum assumption may NOT hold")
 print("=" * 66)
+
+
+# Save final fitted tensor + orientation for use in continuum model
+CSV_DIR.mkdir(parents=True, exist_ok=True)
+tensor_export = np.array(
+    [
+        [
+            0.0,        # angle_deg placeholder for compatibility in continuum import
+            kxx,
+            kxy,
+            kxz,
+            kxy,
+            kyy,
+            kyz,
+            kxz,
+            kyz,
+            kzz,
+            eigvals[0],
+            eigvals[1],
+            eigvals[2],
+            eigvecs[0, 0],
+            eigvecs[1, 0],
+            eigvecs[2, 0],
+            eigvecs[0, 1],
+            eigvecs[1, 1],
+            eigvecs[2, 1],
+            eigvecs[0, 2],
+            eigvecs[1, 2],
+            eigvecs[2, 2],
+            rmse,
+            rel_rmse,
+        ]
+    ]
+)
+
+np.savetxt(
+    TENSOR_EXPORT_PATH,
+    tensor_export,
+    delimiter=",",
+    header=(
+        "angle_deg,k_xx,k_xy,k_xz,k_yx,k_yy,k_yz,k_zx,k_zy,k_zz,"
+        "k1,k2,k3,v1_x,v1_y,v1_z,v2_x,v2_y,v2_z,v3_x,v3_y,v3_z,"
+        "rmse,rel_rmse_percent"
+    ),
+    comments="",
+)
+print(f"Saved fitted tensor and orientation to: {TENSOR_EXPORT_PATH}")
 
 
 # Plot 2: measurements + fitted ellipsoid + principal axes

@@ -27,7 +27,10 @@ ROOT = Path(__file__).resolve().parent
 IMAGES_DIR = ROOT / "images"
 # CSV_PATH = ROOT / "permeability_tensors_3d_rot_0_360.csv"
 # Use a checked-in tensor CSV that matches expected columns.
-CSV_PATH = ROOT / "csv_files" / "permeability_tensor_full_rot15_box100.csv"
+CSV_PATH = ROOT / "csv_files" / "tensor_sim_one.csv"
+
+# Set to "permeability" for m^2 input or "hydraulic_conductivity" for m/s input.
+CSV_TENSOR_UNITS = "hydraulic_conductivity"
 
 # Choose how to pick tensor data: "angle" or "average"
 TENSOR_SELECTION = "angle"
@@ -413,7 +416,14 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
 def main() -> None:
     df = read_tensor_csv(CSV_PATH)
     k_perm, used_angle = select_permeability_tensor(df)
-    k_hyd = permeability_to_hydraulic_conductivity(k_perm)
+    if CSV_TENSOR_UNITS == "hydraulic_conductivity":
+        k_hyd = k_perm
+    elif CSV_TENSOR_UNITS == "permeability":
+        k_hyd = permeability_to_hydraulic_conductivity(k_perm)
+    else:
+        raise ValueError(
+            "CSV_TENSOR_UNITS must be 'permeability' or 'hydraulic_conductivity'."
+        )
 
     k11, k22, k33, angle1 = principal_k_and_angle(k_hyd)
 
