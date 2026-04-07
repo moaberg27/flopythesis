@@ -24,7 +24,13 @@ from shapely.geometry import Polygon
 
 # ----------------------- User settings -----------------------
 ROOT = Path(__file__).resolve().parent
-CSV_PATH = ROOT / "permeability_tensors_3d_rot_0_360.csv"
+IMAGES_DIR = ROOT / "images"
+# CSV_PATH = ROOT / "permeability_tensors_3d_rot_0_360.csv"
+# Use a checked-in tensor CSV that matches expected columns.
+CSV_PATH = ROOT / "csv_files" / "tensor_sim_one.csv"
+
+# Set to "permeability" for m^2 input or "hydraulic_conductivity" for m/s input.
+CSV_TENSOR_UNITS = "hydraulic_conductivity"
 
 # Choose how to pick tensor data: "angle" or "average"
 TENSOR_SELECTION = "angle"
@@ -165,7 +171,8 @@ def build_refined_gridprops_disv() -> dict:
     vtk_path = os.path.join(str(gridgen_ws), "qtg_sv.vtu")
     if os.path.exists(vtk_path):
         refined_grid = pv.read(vtk_path)
-        out_png = ROOT / "gridgen_refined_grid.png"
+        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        out_png = IMAGES_DIR / "gridgen_refined_grid.png"
         p = pv.Plotter(off_screen=True)
         p.add_mesh(refined_grid, show_edges=True, opacity=1)
         p.add_axes()
@@ -272,7 +279,8 @@ def quick_plot_last_layer_head(sim: flopy.mf6.MFSimulation) -> None:
     ax.set_title(f"Head distribution (layer {layer_to_plot})")
     fig.colorbar(quad, ax=ax, label="Head [m]")
     fig.tight_layout()
-    out_png = ROOT / "continuum_head_bottom_layer.png"
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    out_png = IMAGES_DIR / "continuum_head_bottom_layer.png"
     fig.savefig(out_png, dpi=220, bbox_inches="tight")
     print(f"Saved plot: {out_png}")
     plt.show()
@@ -355,7 +363,7 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
         arrows.append((arrow, color))
 
     # Always save an image, so you can inspect results even without GUI support.
-    out_png = ROOT / "continuum_model_pyvista.png"
+    out_png = IMAGES_DIR / "continuum_model_pyvista.png"
     plotter = pv.Plotter(off_screen=True)
     plotter.add_mesh(tensor_ellipsoid, scalars="tensor_value", cmap="viridis",
                      opacity=0.95, show_edges=False)
@@ -365,6 +373,7 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
     plotter.add_axes()
     plotter.show_grid()
     plotter.camera_position = "iso"
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     plotter.show(screenshot=str(out_png))
     print(f"Saved PyVista plot: {out_png}")
 
@@ -381,7 +390,7 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
         plotter2.show(title="Tensor only")
 
     # Separate head-only plot: full 3D cube with every cell colored by head.
-    head_only_png = ROOT / "continuum_model_head_only_pyvista.png"
+    head_only_png = IMAGES_DIR / "continuum_model_head_only_pyvista.png"
 
     plotter_head = pv.Plotter(off_screen=True)
     plotter_head.add_mesh(grid, scalars=scalar_name, cmap=cmap,
@@ -407,7 +416,14 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
 def main() -> None:
     df = read_tensor_csv(CSV_PATH)
     k_perm, used_angle = select_permeability_tensor(df)
-    k_hyd = permeability_to_hydraulic_conductivity(k_perm)
+    if CSV_TENSOR_UNITS == "hydraulic_conductivity":
+        k_hyd = k_perm
+    elif CSV_TENSOR_UNITS == "permeability":
+        k_hyd = permeability_to_hydraulic_conductivity(k_perm)
+    else:
+        raise ValueError(
+            "CSV_TENSOR_UNITS must be 'permeability' or 'hydraulic_conductivity'."
+        )
 
     k11, k22, k33, angle1 = principal_k_and_angle(k_hyd)
 
