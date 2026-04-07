@@ -9,12 +9,20 @@ Concept mirrors the 2D workflow:
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import TextBox
 from pathlib import Path
+
+try:
+    import pyvista as pv
+except ImportError:  # pragma: no cover
+    pv = None
 
 
 ROOT = Path(__file__).resolve().parent
 CSV_DIR = ROOT / "csv_files"
 TENSOR_EXPORT_PATH = CSV_DIR / "tensor_sim_one.csv"
+ROTATIONDATA_EXPORT_PATH = CSV_DIR / "rotationdata.csv"
+IMAGES_DIR = ROOT / "images"
 
 
 def rotation_matrix_zxy(z_deg, x_deg, y_deg):
@@ -71,10 +79,6 @@ print(
     f"Total rotations: {len(rotations_3d)} (expected {len(angles_deg) ** 3})")
 
 
-# DFN results collector
-dfn_results = {}
-
-
 def add_rotation(rotation_deg, k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg):
     """Store 6 K values from one 3D rotation."""
     dfn_results[rotation_deg] = (
@@ -86,6 +90,9 @@ def add_rotation(rotation_deg, k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_
         f"K(+z)={k_z_pos:.4f}, K(-z)={k_z_neg:.4f}"
     )
 
+
+# DFN results collector
+dfn_results = {}
 
 # Underlying "true" anisotropic tensor used by mock DFN
 np.random.seed(42)
@@ -118,9 +125,10 @@ def mock_dfn(rotation_deg, noise=0.10):
     )
 
 # test with isotropic tensor (should give same K in all directions)
-#def mock_dfn(rotation_deg):
- #   k_iso = 1.5
- #   return (3, 3, k_iso, 3, k_iso, 5)
+# def mock_dfn(rotation_deg):
+    k_iso = 1.5
+    return (k_iso, k_iso, k_iso, k_iso, k_iso, k_iso)
+
 
 # Run mock DFN for all rotations and store results
 for rot in rotations_3d:
@@ -137,6 +145,10 @@ points_y_pos = []
 points_y_neg = []
 points_z_pos = []
 points_z_neg = []
+measurement_points = []
+measurement_directions = []
+measurement_rotations = []
+rotation_data_rows = []
 
 for rot in rotations_3d:
     k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = dfn_results[rot]
@@ -152,47 +164,188 @@ for rot in rotations_3d:
     points_z_pos.append(k_z_pos * ez)
     points_z_neg.append(k_z_neg * (-ez))
 
+    measurement_entries = [
+        ("+x", k_x_pos * ex, k_x_pos),
+        ("-x", k_x_neg * (-ex), k_x_neg),
+        ("+y", k_y_pos * ey, k_y_pos),
+        ("-y", k_y_neg * (-ey), k_y_neg),
+        ("+z", k_z_pos * ez, k_z_pos),
+        ("-z", k_z_neg * (-ez), k_z_neg),
+    ]
+    for direction_label, point, k_dir in measurement_entries:
+        measurement_points.append(point)
+        measurement_directions.append(direction_label)
+        measurement_rotations.append(rot)
+        rotation_data_rows.append(
+            [
+                len(rotation_data_rows) + 1,
+                rot[0],
+                rot[1],
+                rot[2],
+                direction_label,
+                k_dir,
+                point[0],
+                point[1],
+                point[2],
+            ]
+        )
+
     print(
         f"Rotation {rot}: "
         f"K(+x)={k_x_pos:.3f}, K(-x)={k_x_neg:.3f}, "
         f"K(+y)={k_y_pos:.3f}, K(-y)={k_y_neg:.3f}, "
         f"K(+z)={k_z_pos:.3f}, K(-z)={k_z_neg:.3f}"
     )
-
 points_x_pos = np.array(points_x_pos)
 points_x_neg = np.array(points_x_neg)
 points_y_pos = np.array(points_y_pos)
 points_y_neg = np.array(points_y_neg)
 points_z_pos = np.array(points_z_pos)
 points_z_neg = np.array(points_z_neg)
+measurement_points = np.array(measurement_points)
+measurement_directions = np.array(measurement_directions)
+measurement_rotations = np.array(measurement_rotations)
 
-all_points = np.vstack(
-    [points_x_pos, points_x_neg, points_y_pos,
-        points_y_neg, points_z_pos, points_z_neg]
-)
+all_points = measurement_points
+
+
+def _format_max_4_decimals(value):
+    rounded = round(float(value), 4)
+    text = f"{rounded:.4f}".rstrip("0").rstrip(".")
+    if text in {"", "-0"}:
+        return "0"
+    return text
+
+
+CSV_DIR.mkdir(parents=True, exist_ok=True)
+with open(ROTATIONDATA_EXPORT_PATH, "w", encoding="utf-8") as csv_file:
+    csv_file.write(
+        "point_id,z_deg,x_deg,y_deg,direction,k_dir,kx,ky,kz\n"
+    )
+    for row in rotation_data_rows:
+        point_id = int(row[0])
+        direction_label = str(row[4])
+        numeric_values = [_format_max_4_decimals(value) for value in row[1:4]]
+        numeric_values.extend(_format_max_4_decimals(value)
+                              for value in row[5:9])
+        csv_file.write(
+            ",".join([str(point_id), *numeric_values[:3],
+                     direction_label, *numeric_values[3:]])
+            + "\n"
+        )
+
+print(f"Saved per-rotation measurement data to: {ROTATIONDATA_EXPORT_PATH}")
 
 
 # Plot 1: raw directional measurements (3D)
 fig1 = plt.figure(figsize=(8, 7))
 ax1 = fig1.add_subplot(111, projection="3d")
-ax1.scatter(*points_x_pos.T, s=45, marker="o", label="+x")
-ax1.scatter(*points_x_neg.T, s=45, marker="o", label="-x")
-ax1.scatter(*points_y_pos.T, s=45, marker="^", label="+y")
-ax1.scatter(*points_y_neg.T, s=45, marker="^", label="-y")
-ax1.scatter(*points_z_pos.T, s=45, marker="s", label="+z")
-ax1.scatter(*points_z_neg.T, s=45, marker="s", label="-z")
+measurement_order = np.arange(1, len(measurement_points) + 1)
+measurement_scatter = ax1.scatter(
+    measurement_points[:, 0],
+    measurement_points[:, 1],
+    measurement_points[:, 2],
+    c=measurement_order,
+    cmap="turbo",
+    s=34,
+    marker="o",
+    alpha=0.92,
+    edgecolors="none",
+)
+highlight_scatter = ax1.scatter(
+    [measurement_points[0, 0]],
+    [measurement_points[0, 1]],
+    [measurement_points[0, 2]],
+    s=120,
+    marker="o",
+    facecolors="none",
+    edgecolors="black",
+    linewidths=1.8,
+)
 ax1.set_xlabel("Kx")
 ax1.set_ylabel("Ky")
 ax1.set_zlabel("Kz")
 ax1.set_title("Directional Hydraulic Conductivity (3D mock DFN)")
-ax1.legend(loc="upper left")
+ax1.text2D(
+    0.02,
+    0.98,
+    "Color = Measurements 1-1296",
+    transform=ax1.transAxes,
+    fontsize=10,
+    verticalalignment="top",
+    bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75},
+)
+
+info_text = ax1.text2D(
+    0.02,
+    0.88,
+    "",
+    transform=ax1.transAxes,
+    fontsize=9,
+    verticalalignment="top",
+    bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75},
+)
+
+fig1.subplots_adjust(bottom=0.16)
+textbox_ax = fig1.add_axes([0.72, 0.07, 0.24, 0.045])
+point_id_box = TextBox(
+    ax=textbox_ax,
+    label="Punkt ID",
+    initial="1",
+)
+
+
+def set_measurement_focus(index):
+    point = measurement_points[index]
+    direction_label = measurement_directions[index]
+    rotation = measurement_rotations[index]
+
+    highlight_scatter._offsets3d = ([point[0]], [point[1]], [point[2]])
+    info_text.set_text(
+        f"Punkt {index + 1}/1296\n"
+        f"Riktning: {direction_label}\n"
+        f"Rotation (z, x, y): {tuple(rotation)}\n"
+        f"K = ({point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f})"
+    )
+    fig1.canvas.draw_idle()
+
+
+def update_measurement_focus(order_number):
+    index = int(order_number) - 1
+    if index < 0 or index >= len(measurement_points):
+        return
+    set_measurement_focus(index)
+
+
+def update_measurement_from_box(text):
+    try:
+        order_number = int(str(text).strip())
+    except ValueError:
+        point_id_box.set_val("")
+        point_id_box.set_val("1")
+        set_measurement_focus(0)
+        return
+
+    order_number = max(1, min(len(measurement_points), order_number))
+    point_id_box.set_val(str(order_number))
+    set_measurement_focus(order_number - 1)
+
+
+point_id_box.on_submit(update_measurement_from_box)
+update_measurement_focus(1)
 
 lim = np.max(np.abs(all_points)) * 1.15
 ax1.set_xlim(-lim, lim)
 ax1.set_ylim(-lim, lim)
 ax1.set_zlim(-lim, lim)
 ax1.set_box_aspect([1, 1, 1])
-plt.tight_layout()
+fig1.colorbar(
+    measurement_scatter,
+    ax=ax1,
+    pad=0.08,
+    shrink=0.75,
+    label="Measurements",
+)
 
 
 # Fit symmetric 3D conductivity tensor via least squares
@@ -393,3 +546,120 @@ ax2.set_box_aspect([1, 1, 1])
 ax2.legend(loc="upper left")
 plt.tight_layout()
 plt.show()
+
+
+def build_continuous_shell_mesh(points_3d, local_fan_neighbors=6):
+    """Build shell mesh using the same robust workflow as test_tva.
+
+    Method: cloud -> delaunay_3d -> extract_surface -> triangulate.
+    """
+    if pv is None:
+        return None, None, None
+
+    points = np.asarray(points_3d, dtype=float)
+    if len(points) < 4:
+        return None, None, None
+
+    cloud = pv.PolyData(points)
+
+    try:
+        vol = cloud.delaunay_3d()
+        surface = vol.extract_surface().triangulate()
+    except Exception:
+        return None, None, None
+
+    if surface is None or surface.n_cells == 0:
+        return None, None, None
+
+    point_ids = np.arange(1, len(points) + 1, dtype=int)
+    mesh = surface
+    return points, mesh, point_ids
+
+
+def plot_pyvista_shell_with_point_ids(points, mesh, point_ids, output_path):
+    """Plot all points, dense faces, and allow click-to-read point IDs."""
+    if pv is None:
+        print("PyVista not available: skipping nodes+faces surface plot.")
+        return
+
+    point_cloud = pv.PolyData(points)
+    point_cloud["point_id"] = point_ids
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _pick_callback(picked_point):
+        if picked_point is None:
+            return
+        picked_point = np.asarray(picked_point, dtype=float)
+        nearest_index = int(
+            np.argmin(np.linalg.norm(points - picked_point, axis=1)))
+        print(
+            f"Picked point_id={point_ids[nearest_index]} at "
+            f"({points[nearest_index, 0]:.6f}, {points[nearest_index, 1]:.6f}, {points[nearest_index, 2]:.6f})"
+        )
+
+    def _add_scene(plotter):
+        plotter.add_mesh(mesh, color="lightsteelblue",
+                         opacity=0.30, show_edges=True)
+        plotter.add_mesh(
+            point_cloud,
+            scalars="point_id",
+            cmap="turbo",
+            point_size=8,
+            render_points_as_spheres=True,
+            pickable=True,
+        )
+        plotter.add_scalar_bar(title="Point ID")
+        plotter.add_axes()
+        plotter.add_title(
+            f"Mock DFN Dense Face Shell With Point IDs 1-{len(point_ids)}")
+        plotter.add_text(
+            "Högerklicka på en punkt för att skriva ut point_id",
+            position="upper_left",
+            font_size=10,
+        )
+        plotter.camera_position = "iso"
+        try:
+            plotter.enable_point_picking(
+                callback=_pick_callback,
+                show_message=True,
+                color="yellow",
+                font_size=10,
+                use_mesh=False,
+                show_point=True,
+            )
+        except Exception:
+            print("Point picking is not available in this PyVista environment.")
+
+    try:
+        plotter = pv.Plotter(window_size=(1200, 800), off_screen=False)
+        _add_scene(plotter)
+        plotter.show(auto_close=False)
+        plotter.screenshot(str(output_path))
+        plotter.close()
+    except Exception:
+        # Fallback for headless environments.
+        plotter = pv.Plotter(window_size=(1200, 800), off_screen=True)
+        _add_scene(plotter)
+        plotter.screenshot(str(output_path))
+        plotter.close()
+
+    print(f"Saved PyVista shell plot: {output_path}")
+
+
+# Plot 3: PyVista continuous shell with all 1296 points retained
+nodes, mesh, point_ids = build_continuous_shell_mesh(all_points)
+if nodes is None:
+    print("Could not build continuous shell mesh from point cloud; skipping Plot 3.")
+else:
+    print("\nPyVista continuous shell mesh summary:")
+    print(f"  Total measurement points: {len(all_points)}")
+    print(f"  Nodes used: {len(nodes)}")
+    print(f"  Point IDs: {point_ids[0]}..{point_ids[-1]}")
+    print(f"  Faces: {mesh.n_cells}")
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    plot_pyvista_shell_with_point_ids(
+        nodes,
+        mesh,
+        point_ids,
+        IMAGES_DIR / "mock_dfn_nodes_faces_surface.png",
+    )
