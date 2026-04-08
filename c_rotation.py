@@ -11,9 +11,4 @@
     # Conductivity tensor for each rotation, stored in a csv file. 
 
 #hejhej
-a = 55 
-b = 22
 
-if a > b:
-    print("a is greater than b")
-else:    print("b is greater than a")

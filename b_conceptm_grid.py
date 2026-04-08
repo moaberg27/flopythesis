@@ -24,7 +24,6 @@ import numpy as np
 import pyvista as pv
 from flopy.export.vtk import Vtk
 from flopy.utils.gridgen import Gridgen
-from flopy.utils.binaryfile import HeadFile
 from shapely.geometry.base import BaseGeometry
 
 

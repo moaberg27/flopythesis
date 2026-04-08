@@ -358,7 +358,6 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
     for i, (eigenval, eigenvec, color) in enumerate(zip(eigvals, eigvecs.T, colors)):
         arrow_length = eigenvec * arrow_scale * \
             np.sqrt(eigenval / eigvals.max())
-        arrow_end = center + arrow_length
         arrow = pv.Arrow(start=center, direction=arrow_length, scale=1)
         arrows.append((arrow, color))
 
