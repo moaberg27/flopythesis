@@ -25,20 +25,20 @@ ROTATIONDATA_EXPORT_PATH = CSV_DIR / "rotationdata.csv"
 IMAGES_DIR = ROOT / "images"
 
 
-def rotation_matrix_zxy(z_deg, x_deg, y_deg):
+def rotation_matrix_zxy(z_deg, x_deg, y_deg): 
     """Return local-to-global rotation for sequence z -> x -> y.
 
     Input tuple convention in this script is (z_deg, x_deg, y_deg).
     """
-    z_rad = np.radians(z_deg)
-    x_rad = np.radians(x_deg)
-    y_rad = np.radians(y_deg)
+    z_rad = np.radians(z_deg) # Rotation around local z-axis (first)
+    x_rad = np.radians(x_deg) # Rotation around local x-axis (second)
+    y_rad = np.radians(y_deg) # Rotation around local y-axis (third)
 
-    cz, sz = np.cos(z_rad), np.sin(z_rad)
+    cz, sz = np.cos(z_rad), np.sin(z_rad) 
     cx, sx = np.cos(x_rad), np.sin(x_rad)
     cy, sy = np.cos(y_rad), np.sin(y_rad)
 
-    rz = np.array([
+    rz = np.array([ 
         [cz, -sz, 0.0],
         [sz, cz, 0.0],
         [0.0, 0.0, 1.0],
@@ -56,11 +56,11 @@ def rotation_matrix_zxy(z_deg, x_deg, y_deg):
     return ry @ rx @ rz
 
 
-def directional_k(k_tensor, direction_vec):
+def directional_k(k_tensor, direction_vec): 
     """Directional conductivity k(n) = n^T K n for unit direction n."""
-    n = np.asarray(direction_vec, dtype=float)
-    n = n / np.linalg.norm(n)
-    return float(n.T @ k_tensor @ n)
+    n = np.asarray(direction_vec, dtype=float) 
+    n = n / np.linalg.norm(n) 
+    return float(n.T @ k_tensor @ n) # return scalar directional conductivity
 
 
 # Rotation set in 3D: (z, x, y) in degrees
@@ -96,8 +96,8 @@ dfn_results = {}
 
 # Underlying "true" anisotropic tensor used by mock DFN
 np.random.seed(42)
-true_principal = np.array([6.0, 2.0, 0.8])
-r_true = rotation_matrix_zxy(z_deg=25.0, x_deg=35.0, y_deg=10.0)
+true_principal = np.array([6.0, 3.0, 1.0])
+r_true = rotation_matrix_zxy(z_deg=25.0, x_deg=35.0, y_deg=10.0) 
 k_true = r_true @ np.diag(true_principal) @ r_true.T
 
 
@@ -126,8 +126,8 @@ def mock_dfn(rotation_deg, noise=0.10):
 
 # test with isotropic tensor (should give same K in all directions)
 # def mock_dfn(rotation_deg):
-    k_iso = 1.5
-    return (k_iso, k_iso, k_iso, k_iso, k_iso, k_iso)
+#     k_iso = 1.5
+#     return (k_iso, k_iso, k_iso, k_iso, k_iso, k_iso)
 
 
 # Run mock DFN for all rotations and store results
@@ -150,13 +150,16 @@ measurement_directions = []
 measurement_rotations = []
 rotation_data_rows = []
 
+# This loop converts the raw scalar K measurements into 3D vectors in the global coordinate frame, ready for plotting and fitting
 for rot in rotations_3d:
-    k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = dfn_results[rot]
+    k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = dfn_results[rot] # 6 scalar K values for this rotation
+    # Build the rotation matrix for this rotation and extract the global directions of local +/-x, +/-y, +/-z
     r = rotation_matrix_zxy(*rot)
     ex = r[:, 0]
     ey = r[:, 1]
     ez = r[:, 2]
-
+    # Convert each scalar K measurement into a 3D point by multiplying the scalar K with the corresponding global direction vector
+    # This gives us the actual directional conductivity vector in global coordinates for each measurement
     points_x_pos.append(k_x_pos * ex)
     points_x_neg.append(k_x_neg * (-ex))
     points_y_pos.append(k_y_pos * ey)
@@ -290,7 +293,7 @@ fig1.subplots_adjust(bottom=0.16)
 textbox_ax = fig1.add_axes([0.72, 0.07, 0.24, 0.045])
 point_id_box = TextBox(
     ax=textbox_ax,
-    label="Punkt ID",
+    label="Point ID",
     initial="1",
 )
 
@@ -302,8 +305,8 @@ def set_measurement_focus(index):
 
     highlight_scatter._offsets3d = ([point[0]], [point[1]], [point[2]])
     info_text.set_text(
-        f"Punkt {index + 1}/1296\n"
-        f"Riktning: {direction_label}\n"
+        f"Point {index + 1}/1296\n"
+        f"Direction: {direction_label}\n"
         f"Rotation (z, x, y): {tuple(rotation)}\n"
         f"K = ({point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f})"
     )
@@ -333,6 +336,29 @@ def update_measurement_from_box(text):
 
 point_id_box.on_submit(update_measurement_from_box)
 update_measurement_focus(1)
+
+
+def _on_click(event):
+    """Click on a point in the 3D scatter to select it."""
+    if event.inaxes is not ax1 or event.button != 1:
+        return
+    # Project all 3D points to 2D screen coordinates
+    from mpl_toolkits.mplot3d import proj3d
+    proj = np.array([
+        proj3d.proj_transform(p[0], p[1], p[2], ax1.get_proj())[:2]
+        for p in measurement_points
+    ])
+    # Convert click to data coords in the projected space
+    click = np.array([event.xdata, event.ydata])
+    if click[0] is None:
+        return
+    dists = np.linalg.norm(proj - click, axis=1)
+    nearest = int(np.argmin(dists))
+    point_id_box.set_val(str(nearest + 1))
+    set_measurement_focus(nearest)
+
+
+fig1.canvas.mpl_connect("button_press_event", _on_click)
 
 lim = np.max(np.abs(all_points)) * 1.15
 ax1.set_xlim(-lim, lim)
@@ -418,6 +444,13 @@ print(
     f"  Principal values: k1 = {eigvals[0]:.4e}, "
     f"k2 = {eigvals[1]:.4e}, k3 = {eigvals[2]:.4e}"
 )
+print(f"  Principal axes (columns):\n{eigvecs}")
+print(f"  Angle between k1 axis and global x-axis: "
+      f"{np.degrees(np.arccos(np.clip(abs(eigvecs[0, 0]), 0.0, 1.0))):.2f}°")
+print(f"  Angle between k1 axis and global y-axis: "
+      f"{np.degrees(np.arccos(np.clip(abs(eigvecs[1, 0]), 0.0, 1.0))):.2f}°")
+print(f"  Angle between k1 axis and global z-axis: "
+      f"{np.degrees(np.arccos(np.clip(abs(eigvecs[2, 0]), 0.0, 1.0))):.2f}°")
 print(f"  Anisotropy ratio: {eigvals[0] / max(eigvals[2], 1e-12):.2f}")
 print(f"  RMSE residual:    {rmse:.4e}  (relative: {rel_rmse:.2f}%)")
 if rel_rmse < 5:
@@ -477,25 +510,29 @@ print(f"Saved fitted tensor and orientation to: {TENSOR_EXPORT_PATH}")
 
 
 # Plot 2: measurements + fitted ellipsoid + principal axes
-u = np.linspace(0.0, 2.0 * np.pi, 64)
-v = np.linspace(0.0, np.pi, 32)
-uu, vv = np.meshgrid(u, v)
+#Conductivity representation surface (or Lamé's stress ellipsoid analog for tensors)
+# Sphere → multiply each point by K(n) → ellipsoid
+u = np.linspace(0.0, 2.0 * np.pi, 64) # azimuthal angle for ellipsoid surface sampling (like longitude on a globe)
+v = np.linspace(0.0, np.pi, 32) # polar angle for ellipsoid surface sampling (like latitude on a globe)
+uu, vv = np.meshgrid(u, v) # create a grid of angles for sampling the ellipsoid surface
 
-# Unit sphere parametric points
+# Unit sphere parametric points 
 sx = np.cos(uu) * np.sin(vv)
 sy = np.sin(uu) * np.sin(vv)
 sz = np.cos(vv)
 
-# Build ellipsoid in principal basis and rotate to global basis
-xp = eigvals_plot[0] * sx
-yp = eigvals_plot[1] * sy
-zp = eigvals_plot[2] * sz
-
-ellipsoid = np.stack([xp.ravel(), yp.ravel(), zp.ravel()], axis=0)
-ellipsoid_global = eigvecs @ ellipsoid
-xe = ellipsoid_global[0].reshape(sx.shape)
-ye = ellipsoid_global[1].reshape(sx.shape)
-ze = ellipsoid_global[2].reshape(sz.shape)
+# Build conductivity representation surface: K(n)*n in global frame.
+# K(n) = n^T K_fit n; plotted as K(n)*n -- this is the same surface the measurement points trace, so the fitted surface will pass through them.
+k_surf = (
+    sx**2 * kxx + sy**2 * kyy + sz**2 * kzz
+    + 2.0 * sx * sy * kxy
+    + 2.0 * sx * sz * kxz
+    + 2.0 * sy * sz * kyz
+)
+# Scale the unit sphere by the directional conductivity to get the actual 3D coordinates of the fitted ellipsoid surface in global frame
+xe = k_surf * sx # actual 3D coordinates of the fitted ellipsoid surface in global frame
+ye = k_surf * sy
+ze = k_surf * sz
 
 fig2 = plt.figure(figsize=(9, 8))
 ax2 = fig2.add_subplot(111, projection="3d")
@@ -549,10 +586,16 @@ plt.show()
 
 
 def build_continuous_shell_mesh(points_3d, local_fan_neighbors=6):
-    """Build shell mesh using the same robust workflow as test_tva.
+    """Build shell mesh so that ALL 1296 points appear in a face.
 
-    Method: cloud -> delaunay_3d -> extract_surface -> triangulate.
+    Strategy: normalise every point to the unit sphere, then compute the
+    convex hull of the unit directions.  Because all unit vectors lie on
+    the sphere surface they are all hull vertices, so every original point
+    is guaranteed to appear in at least one triangle.  The face indices are
+    then applied back to the original (non-normalised) 3-D coordinates.
     """
+    from scipy.spatial import ConvexHull
+
     if pv is None:
         return None, None, None
 
@@ -560,19 +603,26 @@ def build_continuous_shell_mesh(points_3d, local_fan_neighbors=6):
     if len(points) < 4:
         return None, None, None
 
-    cloud = pv.PolyData(points)
+    # Normalise to unit sphere so every point is on the convex boundary
+    norms = np.linalg.norm(points, axis=1, keepdims=True)
+    unit = points / np.where(norms > 0, norms, 1.0)
 
     try:
-        vol = cloud.delaunay_3d()
-        surface = vol.extract_surface().triangulate()
+        hull = ConvexHull(unit)
     except Exception:
         return None, None, None
 
-    if surface is None or surface.n_cells == 0:
-        return None, None, None
+    faces = hull.simplices          # triangle indices into `unit` == into `points`
 
+    # Build PyVista face array: [3, i0, i1, i2,  3, i0, i1, i2, ...]
+    pv_faces = np.hstack([
+        np.full((len(faces), 1), 3, dtype=np.intp),
+        faces,
+    ]).ravel()
+
+    # Use original (non-normalised) points for the mesh geometry
+    mesh = pv.PolyData(points, pv_faces)
     point_ids = np.arange(1, len(points) + 1, dtype=int)
-    mesh = surface
     return points, mesh, point_ids
 
 
@@ -646,6 +696,101 @@ def plot_pyvista_shell_with_point_ids(points, mesh, point_ids, output_path):
     print(f"Saved PyVista shell plot: {output_path}")
 
 
+def plot_pyvista_fitted_surface(k_fit, eigvals, eigvecs, all_points, output_path):
+    """Plot 4: fitted conductivity surface K(n)*n as a PyVista mesh.
+
+    The surface is built from a dense uniform sphere sampling so the mesh
+    is smooth and independent of the measurement grid.  The raw measurement
+    points are overlaid for comparison.
+    """
+    if pv is None:
+        print("PyVista not available: skipping fitted surface plot.")
+        return
+
+    # Dense unit-sphere grid (Fibonacci lattice -> uniform coverage)
+    n_pts = 4000
+    golden = (1.0 + np.sqrt(5.0)) / 2.0
+    ii = np.arange(n_pts)
+    theta_fib = np.arccos(1.0 - 2.0 * (ii + 0.5) / n_pts)
+    phi_fib   = 2.0 * np.pi * ii / golden
+    sx = np.sin(theta_fib) * np.cos(phi_fib)
+    sy = np.sin(theta_fib) * np.sin(phi_fib)
+    sz = np.cos(theta_fib)
+    unit_dirs = np.column_stack([sx, sy, sz])   # (n_pts, 3)
+
+    # Evaluate K(n) = n^T K_fit n for every direction
+    kxx, kxy, kxz = k_fit[0, 0], k_fit[0, 1], k_fit[0, 2]
+    kyy, kyz, kzz = k_fit[1, 1], k_fit[1, 2], k_fit[2, 2]
+    k_vals = (
+        unit_dirs[:, 0]**2 * kxx
+        + unit_dirs[:, 1]**2 * kyy
+        + unit_dirs[:, 2]**2 * kzz
+        + 2.0 * unit_dirs[:, 0] * unit_dirs[:, 1] * kxy
+        + 2.0 * unit_dirs[:, 0] * unit_dirs[:, 2] * kxz
+        + 2.0 * unit_dirs[:, 1] * unit_dirs[:, 2] * kyz
+    )
+    surf_pts = unit_dirs * k_vals[:, np.newaxis]   # K(n)*n
+
+    # Convex hull on unit directions -> triangulation covering all pts
+    from scipy.spatial import ConvexHull
+    hull = ConvexHull(unit_dirs)
+    faces = hull.simplices
+    pv_faces = np.hstack([
+        np.full((len(faces), 1), 3, dtype=np.intp),
+        faces,
+    ]).ravel()
+
+    surf_mesh = pv.PolyData(surf_pts, pv_faces)
+    surf_mesh["K"] = k_vals
+
+    meas_cloud = pv.PolyData(np.asarray(all_points, dtype=float))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _add_scene(plotter):
+        plotter.add_mesh(
+            surf_mesh,
+            scalars="K",
+            cmap="coolwarm",
+            opacity=0.55,
+            show_edges=False,
+            label="Fitted K(n) surface",
+        )
+        plotter.add_mesh(
+            meas_cloud,
+            color="white",
+            point_size=4,
+            render_points_as_spheres=True,
+            opacity=0.6,
+            label="Measurements",
+        )
+        # Principal axes as arrows
+        colors = ["red", "green", "blue"]
+        labels = [f"k1={eigvals[0]:.2f}", f"k2={eigvals[1]:.2f}", f"k3={eigvals[2]:.2f}"]
+        for i, (col, lbl) in enumerate(zip(colors, labels)):
+            tip = eigvals[i] * eigvecs[:, i]
+            arrow = pv.Arrow(start=(0, 0, 0), direction=tip, scale=np.linalg.norm(tip))
+            plotter.add_mesh(arrow, color=col, label=lbl)
+        plotter.add_scalar_bar(title="K(n)  [m/d]")
+        plotter.add_axes()
+        plotter.add_title("Fitted Conductivity Surface K(n)·n  (PyVista)")
+        plotter.camera_position = "iso"
+
+    try:
+        plotter = pv.Plotter(window_size=(1200, 800), off_screen=False)
+        _add_scene(plotter)
+        plotter.show(auto_close=False)
+        plotter.screenshot(str(output_path))
+        plotter.close()
+    except Exception:
+        plotter = pv.Plotter(window_size=(1200, 800), off_screen=True)
+        _add_scene(plotter)
+        plotter.screenshot(str(output_path))
+        plotter.close()
+
+    print(f"Saved fitted surface plot: {output_path}")
+
+
 # Plot 3: PyVista continuous shell with all 1296 points retained
 nodes, mesh, point_ids = build_continuous_shell_mesh(all_points)
 if nodes is None:
@@ -662,4 +807,14 @@ else:
         mesh,
         point_ids,
         IMAGES_DIR / "mock_dfn_nodes_faces_surface.png",
+    )
+
+# Plot 4: PyVista fitted conductivity surface K(n)*n
+if pv is not None:
+    plot_pyvista_fitted_surface(
+        k_fit,
+        eigvals,
+        eigvecs,
+        all_points,
+        IMAGES_DIR / "mock_dfn_fitted_surface.png",
     )
