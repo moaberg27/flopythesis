@@ -1,35 +1,31 @@
-"""Continuum assumption test in 3D using a mock DFN.
+"""Continuum assumption test in 3D using a mock values for K.
 
-Concept mirrors the 2D workflow:
-1) Run mock DFN for several model rotations.
+1) Run mock K values for several model rotations.
 2) Collect directional conductivity measurements.
 3) Fit a symmetric 3D conductivity tensor K.
 4) Evaluate fit quality (RMSE) and visualize measurement cloud + fitted ellipsoid.
 """
 
+# Import important packages
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import TextBox
+from matplotlib.widgets import TextBox, Button
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from pathlib import Path
+import time
+import pyvista as pv
 
-try:
-    import pyvista as pv
-except ImportError:  # pragma: no cover
-    pv = None
-
-
+# File paths for saving results and images
 ROOT = Path(__file__).resolve().parent
 CSV_DIR = ROOT / "csv_files"
 TENSOR_EXPORT_PATH = CSV_DIR / "tensor_sim_one.csv"
 ROTATIONDATA_EXPORT_PATH = CSV_DIR / "rotationdata.csv"
 IMAGES_DIR = ROOT / "images"
 
-
+# Creating rotation matrixes for 3D rotations in z-x-y order
 def rotation_matrix_zxy(z_deg, x_deg, y_deg):
-    """Return local-to-global rotation for sequence z -> x -> y.
-
-    Input tuple convention in this script is (z_deg, x_deg, y_deg).
-    """
+    
+    # converting degrees to radians for each rotation angle
     z_rad = np.radians(z_deg)
     x_rad = np.radians(x_deg)
     y_rad = np.radians(y_deg)
@@ -38,6 +34,7 @@ def rotation_matrix_zxy(z_deg, x_deg, y_deg):
     cx, sx = np.cos(x_rad), np.sin(x_rad)
     cy, sy = np.cos(y_rad), np.sin(y_rad)
 
+# Rotation matrixes for each axis (applied in z-x-y order)
     rz = np.array([
         [cz, -sz, 0.0],
         [sz, cz, 0.0],
@@ -55,7 +52,7 @@ def rotation_matrix_zxy(z_deg, x_deg, y_deg):
     ])
     return ry @ rx @ rz
 
-
+# Function to compute directional conductivity k(n) = n^T K n for unit direction n
 def directional_k(k_tensor, direction_vec):
     """Directional conductivity k(n) = n^T K n for unit direction n."""
     n = np.asarray(direction_vec, dtype=float)
@@ -64,11 +61,11 @@ def directional_k(k_tensor, direction_vec):
 
 
 # Rotation set in 3D: (z, x, y) in degrees
-# Order follows your request:
 # 1) z from 0..75 at fixed x,y
 # 2) then next x-step and sweep z again
 # 3) then next y-step and repeat
-angles_deg = [0, 15, 30, 45, 60, 75]
+
+angles_deg = [0, 15, 30, 45, 60, 75]    # rotation angles for each axis
 rotations_3d = [
     (z_deg, x_deg, y_deg)
     for y_deg in angles_deg
@@ -79,10 +76,14 @@ print(
     f"Total rotations: {len(rotations_3d)} (expected {len(angles_deg) ** 3})")
 
 
+# Results collector
+k_results = {}
+
+# Helper function to store results from one rotation and print summary
 def add_rotation(rotation_deg, k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg):
     """Store 6 K values from one 3D rotation."""
-    dfn_results[rotation_deg] = (
-        k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg)
+    k_results[rotation_deg] = (
+        k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg) # Store results for all 6 directiosn in each rotation 
     print(
         f"Added rotation {rotation_deg}: "
         f"K(+x)={k_x_pos:.4f}, K(-x)={k_x_neg:.4f}, "
@@ -90,9 +91,6 @@ def add_rotation(rotation_deg, k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_
         f"K(+z)={k_z_pos:.4f}, K(-z)={k_z_neg:.4f}"
     )
 
-
-# DFN results collector
-dfn_results = {}
 
 # Underlying "true" anisotropic tensor used by mock DFN
 np.random.seed(42)
@@ -125,7 +123,7 @@ def mock_dfn(rotation_deg, noise=0.10):
     )
 
 # test with isotropic tensor (should give same K in all directions)
-# def mock_dfn(rotation_deg):
+def mock_dfn(rotation_deg):
     k_iso = 1.5
     return (k_iso, k_iso, k_iso, k_iso, k_iso, k_iso)
 
@@ -134,7 +132,7 @@ def mock_dfn(rotation_deg, noise=0.10):
 for rot in rotations_3d:
     add_rotation(rot, *mock_dfn(rot))
 
-assert set(dfn_results.keys()) == set(
+assert set(k_results.keys()) == set(
     rotations_3d), "Missing one or more 3D rotations."
 
 
@@ -149,9 +147,10 @@ measurement_points = []
 measurement_directions = []
 measurement_rotations = []
 rotation_data_rows = []
+dir_records = {"+x": [], "-x": [], "+y": [], "-y": [], "+z": [], "-z": []}
 
 for rot in rotations_3d:
-    k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = dfn_results[rot]
+    k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = k_results[rot]
     r = rotation_matrix_zxy(*rot)
     ex = r[:, 0]
     ey = r[:, 1]
@@ -173,6 +172,24 @@ for rot in rotations_3d:
         ("-z", k_z_neg * (-ez), k_z_neg),
     ]
     for direction_label, point, k_dir in measurement_entries:
+        dir_records[direction_label].append((rot, k_dir, point))
+
+    print(
+        f"Rotation {rot}: "
+        f"K(+x)={k_x_pos:.3f}, K(-x)={k_x_neg:.3f}, "
+        f"K(+y)={k_y_pos:.3f}, K(-y)={k_y_neg:.3f}, "
+        f"K(+z)={k_z_pos:.3f}, K(-z)={k_z_neg:.3f}"
+    )
+points_x_pos = np.array(points_x_pos)
+points_x_neg = np.array(points_x_neg)
+points_y_pos = np.array(points_y_pos)
+points_y_neg = np.array(points_y_neg)
+points_z_pos = np.array(points_z_pos)
+points_z_neg = np.array(points_z_neg)
+
+direction_order = ["+x", "-x", "+y", "-y", "+z", "-z"]
+for direction_label in direction_order:
+    for rot, k_dir, point in dir_records[direction_label]:
         measurement_points.append(point)
         measurement_directions.append(direction_label)
         measurement_rotations.append(rot)
@@ -190,18 +207,6 @@ for rot in rotations_3d:
             ]
         )
 
-    print(
-        f"Rotation {rot}: "
-        f"K(+x)={k_x_pos:.3f}, K(-x)={k_x_neg:.3f}, "
-        f"K(+y)={k_y_pos:.3f}, K(-y)={k_y_neg:.3f}, "
-        f"K(+z)={k_z_pos:.3f}, K(-z)={k_z_neg:.3f}"
-    )
-points_x_pos = np.array(points_x_pos)
-points_x_neg = np.array(points_x_neg)
-points_y_pos = np.array(points_y_pos)
-points_y_neg = np.array(points_y_neg)
-points_z_pos = np.array(points_z_pos)
-points_z_neg = np.array(points_z_neg)
 measurement_points = np.array(measurement_points)
 measurement_directions = np.array(measurement_directions)
 measurement_rotations = np.array(measurement_rotations)
@@ -215,6 +220,149 @@ def _format_max_4_decimals(value):
     if text in {"", "-0"}:
         return "0"
     return text
+
+
+def show_rotation_box_interactive(rotations):
+    """Show a transparent rotating box and let user jump to rotation ID."""
+    if len(rotations) == 0:
+        print("No rotations available, skipping interactive rotation box.")
+        return
+
+    box_half_size = 1.0
+    base_vertices = np.array(
+        [
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+        ],
+        dtype=float,
+    ) * box_half_size
+    face_indices = [
+        [0, 1, 2, 3],
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [2, 3, 7, 6],
+        [1, 2, 6, 5],
+        [0, 3, 7, 4],
+    ]
+    face_colors = [
+        (0.1, 0.4, 1.0, 0.26),  # blue pair
+        (0.1, 0.4, 1.0, 0.26),
+        (0.1, 0.7, 0.2, 0.26),  # green pair
+        (0.1, 0.7, 0.2, 0.26),
+        (0.9, 0.2, 0.2, 0.26),  # red pair
+        (0.9, 0.2, 0.2, 0.26),
+    ]
+
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_title("Interactive Rotation Box (Origin at Center)")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    axis_lim = box_half_size * 1.8
+    ax.set_xlim(-axis_lim, axis_lim)
+    ax.set_ylim(-axis_lim, axis_lim)
+    ax.set_zlim(-axis_lim, axis_lim)
+    ax.set_box_aspect([1, 1, 1])
+
+    # Keep origin visible in the middle of the box.
+    ax.scatter([0.0], [0.0], [0.0], color="black", s=35)
+    ax.text2D(0.02, 0.98, "Origin", transform=ax.transAxes, fontsize=10)
+
+    box_collection = Poly3DCollection(
+        [],
+        facecolors=face_colors,
+        edgecolors="navy",
+        linewidths=1.0,
+    )
+    ax.add_collection3d(box_collection)
+
+    status_text = ax.text2D(
+        0.02,
+        0.90,
+        "",
+        transform=ax.transAxes,
+        fontsize=10,
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75},
+    )
+
+    fig.subplots_adjust(bottom=0.16)
+    box_ax = fig.add_axes([0.70, 0.05, 0.26, 0.05])
+    rotation_id_box = TextBox(box_ax, "Rotation ID", initial="1")
+    play_ax = fig.add_axes([0.53, 0.05, 0.14, 0.05])
+    play_button = Button(play_ax, "Play")
+
+    state = {
+        "index": 0,
+        "playing": False,
+        "pause_until": 0.0,
+    }
+
+    def _update(frame_index):
+        state["index"] = int(frame_index)
+        z_deg, x_deg, y_deg = rotations[frame_index]
+        r = rotation_matrix_zxy(z_deg, x_deg, y_deg)
+        rotated_vertices = (r @ base_vertices.T).T
+        rotated_faces = [[rotated_vertices[idx]
+                          for idx in face] for face in face_indices]
+        box_collection.set_verts(rotated_faces)
+        status_text.set_text(
+            f"Rotation {frame_index + 1}/{len(rotations)}\\n"
+            f"z={z_deg} deg, x={x_deg} deg, y={y_deg} deg"
+        )
+        fig.canvas.draw_idle()
+
+    def _submit_rotation_id(text):
+        try:
+            rotation_id = int(str(text).strip())
+        except ValueError:
+            rotation_id = 1
+        rotation_id = max(1, min(len(rotations), rotation_id))
+        if str(rotation_id) != str(text).strip():
+            rotation_id_box.set_val(str(rotation_id))
+        _update(rotation_id - 1)
+
+    def _toggle_play(_event):
+        state["playing"] = not state["playing"]
+        play_button.label.set_text("Pause" if state["playing"] else "Play")
+        fig.canvas.draw_idle()
+
+    def _tick():
+        if not state["playing"]:
+            return
+
+        now = time.monotonic()
+        if now < state["pause_until"]:
+            return
+
+        next_index = state["index"] + 1
+        if next_index >= len(rotations):
+            state["playing"] = False
+            play_button.label.set_text("Play")
+            fig.canvas.draw_idle()
+            return
+
+        _update(next_index)
+
+        # Pause after each block of 36 rotations before continuing.
+        if ((next_index + 1) % 36 == 0) and (next_index + 1 < len(rotations)):
+            state["pause_until"] = now + 1.5
+
+    rotation_id_box.on_submit(_submit_rotation_id)
+    play_button.on_clicked(_toggle_play)
+    _update(0)
+
+    timer = fig.canvas.new_timer(interval=250)
+    timer.add_callback(_tick)
+    timer.start()
+
+    plt.show()
 
 
 CSV_DIR.mkdir(parents=True, exist_ok=True)
@@ -265,7 +413,7 @@ highlight_scatter = ax1.scatter(
 ax1.set_xlabel("Kx")
 ax1.set_ylabel("Ky")
 ax1.set_zlabel("Kz")
-ax1.set_title("Directional Hydraulic Conductivity (3D mock DFN)")
+ax1.set_title("Directional Hydraulic Conductivity")
 ax1.text2D(
     0.02,
     0.98,
@@ -290,7 +438,7 @@ fig1.subplots_adjust(bottom=0.16)
 textbox_ax = fig1.add_axes([0.72, 0.07, 0.24, 0.045])
 point_id_box = TextBox(
     ax=textbox_ax,
-    label="Punkt ID",
+    label="Point ID",
     initial="1",
 )
 
@@ -302,8 +450,8 @@ def set_measurement_focus(index):
 
     highlight_scatter._offsets3d = ([point[0]], [point[1]], [point[2]])
     info_text.set_text(
-        f"Punkt {index + 1}/1296\n"
-        f"Riktning: {direction_label}\n"
+        f"Point {index + 1}/1296\n"
+        f"Direction: {direction_label}\n"
         f"Rotation (z, x, y): {tuple(rotation)}\n"
         f"K = ({point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f})"
     )
@@ -357,7 +505,7 @@ dirs = []
 k_meas = []
 
 for rot in rotations_3d:
-    k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = dfn_results[rot]
+    k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = k_results[rot]
     r = rotation_matrix_zxy(*rot)
     ex = r[:, 0]
     ey = r[:, 1]
@@ -663,3 +811,6 @@ else:
         point_ids,
         IMAGES_DIR / "mock_dfn_nodes_faces_surface.png",
     )
+
+
+show_rotation_box_interactive(rotations_3d)
