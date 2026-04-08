@@ -65,6 +65,18 @@ cover/
 /cube_rotation_workspace/
 /mf6_cube/
 /mf6lake/
+/circular/
+/squared/
+
+# Virtual environment
+/.FloPyEnv/
+
+# Backup / copy files
+*- Copy
+*- Copy.*
+
+# Executables (downloaded via flopy)
+*.exe
 
 
 
