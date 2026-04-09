@@ -13,7 +13,25 @@ def calc_conductivity(k, theta, direction):
     
     return k_eff
 
-rotations = [0, 15, 30, 45, 60, 75]
+def build_rotations_to_90(step_angle):
+    if not isinstance(step_angle, int):
+        raise ValueError("step_angle must be an integer (e.g. 10, 15)")
+
+    if step_angle <= 0:
+        raise ValueError("step_angle must be > 0")
+
+    # Require exact coverage of 0..90 with 90 excluded from output.
+    if 90 % step_angle != 0:
+        raise ValueError(
+            f"step_angle={step_angle} does not divide 90 exactly. "
+            "Use a step that is a factor of 90 (e.g. 1, 2, 3, 5, 6, 9, 10, 15, 18, 30, 45)."
+        )
+
+    return list(range(0, 90, step_angle))
+
+
+step_angle = 15
+rotations = build_rotations_to_90(step_angle)
 
 def compute_conductivity_points_3d(k, rotations):
     points_x_pos = []
