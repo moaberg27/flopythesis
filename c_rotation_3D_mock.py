@@ -1,35 +1,36 @@
 """Continuum assumption test in 3D using a mock DFN.
 
-Concept mirrors the 2D workflow:
-1) Run mock DFN for several model rotations.
-2) Collect directional conductivity measurements.
-3) Fit a symmetric 3D conductivity tensor K.
-4) Evaluate fit quality (RMSE) and visualize measurement cloud + fitted ellipsoid.
+
+his script evaluates whether directional hydraulic conductivity data
+can be represented by a symmetric 3D conductivity tensor.
+
+Workflow:
+1) Rotate a mock DFN model through multiple 3D orientations.
+2) Sample directional hydraulic conductivity along local ±x, ±y, ±z axes.
+3) Fit a symmetric 3D conductivity tensor using least squares.
+4) Evaluate fit quality (RMSE) and visualize the measurement cloud
+   together with the fitted conductivity ellipsoid.
 """
 
+## 1 Imports and Paths 
+# Import standard libraries used in script
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import TextBox
 from pathlib import Path
+import pyvista as pv
 
-try:
-    import pyvista as pv
-except ImportError:  # pragma: no cover
-    pv = None
-
-
+# Set up file paths for input CSVs and output images
 ROOT = Path(__file__).resolve().parent
 CSV_DIR = ROOT / "csv_files"
 TENSOR_EXPORT_PATH = CSV_DIR / "tensor_sim_one.csv"
 ROTATIONDATA_EXPORT_PATH = CSV_DIR / "rotationdata.csv"
 IMAGES_DIR = ROOT / "images"
 
-
+## 2 Rotation handling 
+# Define rotation sets based on degrees, converting to radians and building rotation.
 def rotation_matrix_zxy(z_deg, x_deg, y_deg):
-    """Return local-to-global rotation for sequence z -> x -> y.
 
-    Input tuple convention in this script is (z_deg, x_deg, y_deg).
-    """
     z_rad = np.radians(z_deg)
     x_rad = np.radians(x_deg)
     y_rad = np.radians(y_deg)
@@ -38,7 +39,7 @@ def rotation_matrix_zxy(z_deg, x_deg, y_deg):
     cx, sx = np.cos(x_rad), np.sin(x_rad)
     cy, sy = np.cos(y_rad), np.sin(y_rad)
 
-    rz = np.array([
+    rz = np.array([            # Building individual rotation matrices for each axis
         [cz, -sz, 0.0],
         [sz, cz, 0.0],
         [0.0, 0.0, 1.0],
@@ -55,12 +56,29 @@ def rotation_matrix_zxy(z_deg, x_deg, y_deg):
     ])
     return ry @ rx @ rz
 
-
+# Compute directional hydraulic conductivity for a given unit vector
 def directional_k(k_tensor, direction_vec):
     """Directional conductivity k(n) = n^T K n for unit direction n."""
     n = np.asarray(direction_vec, dtype=float)
     n = n / np.linalg.norm(n)
     return float(n.T @ k_tensor @ n)
+
+# Build rotations in 3D with specified step angles, ensuring they divide 90 degrees exactly.
+def build_angles_to_90(step_angle):
+    """Build [0, step, 2*step, ...] up to but excluding 90."""
+    if not isinstance(step_angle, int):
+        raise ValueError("step_angle must be an integer (e.g. 10, 15)")
+    if step_angle <= 0:
+        raise ValueError("step_angle must be > 0")
+    if 90 % step_angle != 0:
+        raise ValueError(
+            f"step_angle={step_angle} does not divide 90 exactly. "
+            "Use a factor of 90 (e.g. 1, 2, 3, 5, 6, 9, 10, 15, 18, 30, 45)."
+        )
+    return list(range(0, 90, step_angle))
+
+# Deciding step angel, can be adjusted to increase/decrease number of rotations (e.g. 10, 15, 30)
+step_angle = 15
 
 
 # Rotation set in 3D: (z, x, y) in degrees
@@ -68,7 +86,7 @@ def directional_k(k_tensor, direction_vec):
 # 1) z from 0..75 at fixed x,y
 # 2) then next x-step and sweep z again
 # 3) then next y-step and repeat
-angles_deg = [0, 15, 30, 45, 60, 75]
+angles_deg = build_angles_to_90(step_angle)
 rotations_3d = [
     (z_deg, x_deg, y_deg)
     for y_deg in angles_deg
@@ -79,6 +97,7 @@ print(
     f"Total rotations: {len(rotations_3d)} (expected {len(angles_deg) ** 3})")
 
 
+# Store directional conductivity results for a given rotation
 def add_rotation(rotation_deg, k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg):
     """Store 6 K values from one 3D rotation."""
     dfn_results[rotation_deg] = (
@@ -90,13 +109,12 @@ def add_rotation(rotation_deg, k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_
         f"K(+z)={k_z_pos:.4f}, K(-z)={k_z_neg:.4f}"
     )
 
-
 # DFN results collector
 dfn_results = {}
 
 # Underlying "true" anisotropic tensor used by mock DFN
 np.random.seed(42)
-true_principal = np.array([6.0, 2.0, 0.8])
+true_principal = np.array([6.0, 2.0, 2.0])
 r_true = rotation_matrix_zxy(z_deg=25.0, x_deg=35.0, y_deg=10.0)
 k_true = r_true @ np.diag(true_principal) @ r_true.T
 
@@ -125,7 +143,7 @@ def mock_dfn(rotation_deg, noise=0.10):
     )
 
 # test with isotropic tensor (should give same K in all directions)
-# def mock_dfn(rotation_deg):
+#def mock_dfn(rotation_deg):
     k_iso = 1.5
     return (k_iso, k_iso, k_iso, k_iso, k_iso, k_iso)
 
@@ -149,6 +167,14 @@ measurement_points = []
 measurement_directions = []
 measurement_rotations = []
 rotation_data_rows = []
+direction_buckets = {
+    "+x": [],
+    "-x": [],
+    "+y": [],
+    "-y": [],
+    "+z": [],
+    "-z": [],
+}
 
 for rot in rotations_3d:
     k_x_pos, k_x_neg, k_y_pos, k_y_neg, k_z_pos, k_z_neg = dfn_results[rot]
@@ -173,6 +199,19 @@ for rot in rotations_3d:
         ("-z", k_z_neg * (-ez), k_z_neg),
     ]
     for direction_label, point, k_dir in measurement_entries:
+        direction_buckets[direction_label].append((rot, point, k_dir))
+
+    print(
+        f"Rotation {rot}: "
+        f"K(+x)={k_x_pos:.3f}, K(-x)={k_x_neg:.3f}, "
+        f"K(+y)={k_y_pos:.3f}, K(-y)={k_y_neg:.3f}, "
+        f"K(+z)={k_z_pos:.3f}, K(-z)={k_z_neg:.3f}"
+    )
+
+# Build outputs grouped by direction (all +x first, then all -x, etc.)
+direction_order = ["+x", "-x", "+y", "-y", "+z", "-z"]
+for direction_label in direction_order:
+    for rot, point, k_dir in direction_buckets[direction_label]:
         measurement_points.append(point)
         measurement_directions.append(direction_label)
         measurement_rotations.append(rot)
@@ -190,12 +229,6 @@ for rot in rotations_3d:
             ]
         )
 
-    print(
-        f"Rotation {rot}: "
-        f"K(+x)={k_x_pos:.3f}, K(-x)={k_x_neg:.3f}, "
-        f"K(+y)={k_y_pos:.3f}, K(-y)={k_y_neg:.3f}, "
-        f"K(+z)={k_z_pos:.3f}, K(-z)={k_z_neg:.3f}"
-    )
 points_x_pos = np.array(points_x_pos)
 points_x_neg = np.array(points_x_neg)
 points_y_pos = np.array(points_y_pos)
@@ -208,7 +241,7 @@ measurement_rotations = np.array(measurement_rotations)
 
 all_points = measurement_points
 
-
+# Defines how values are stored in CSV file
 def _format_max_4_decimals(value):
     rounded = round(float(value), 4)
     text = f"{rounded:.4f}".rstrip("0").rstrip(".")
@@ -217,6 +250,7 @@ def _format_max_4_decimals(value):
     return text
 
 
+# Save rotation data to CSV for reference and use in continuum import
 CSV_DIR.mkdir(parents=True, exist_ok=True)
 with open(ROTATIONDATA_EXPORT_PATH, "w", encoding="utf-8") as csv_file:
     csv_file.write(
@@ -269,7 +303,7 @@ ax1.set_title("Directional Hydraulic Conductivity (3D mock DFN)")
 ax1.text2D(
     0.02,
     0.98,
-    "Color = Measurements 1-1296",
+    f"Color = Measurements 1-{len(measurement_points)}",
     transform=ax1.transAxes,
     fontsize=10,
     verticalalignment="top",
@@ -302,7 +336,7 @@ def set_measurement_focus(index):
 
     highlight_scatter._offsets3d = ([point[0]], [point[1]], [point[2]])
     info_text.set_text(
-        f"Punkt {index + 1}/1296\n"
+        f"Punkt {index + 1}/{len(measurement_points)}\n"
         f"Riktning: {direction_label}\n"
         f"Rotation (z, x, y): {tuple(rotation)}\n"
         f"K = ({point[0]:.3f}, {point[1]:.3f}, {point[2]:.3f})"
@@ -548,6 +582,8 @@ plt.tight_layout()
 plt.show()
 
 
+
+
 def build_continuous_shell_mesh(points_3d, local_fan_neighbors=6):
     """Build shell mesh using the same robust workflow as test_tva.
 
@@ -646,15 +682,14 @@ def plot_pyvista_shell_with_point_ids(points, mesh, point_ids, output_path):
     print(f"Saved PyVista shell plot: {output_path}")
 
 
-# Plot 3: PyVista continuous shell with all 1296 points retained
+# Plot 3: PyVista continuous shell with all points retained
 nodes, mesh, point_ids = build_continuous_shell_mesh(all_points)
 if nodes is None:
     print("Could not build continuous shell mesh from point cloud; skipping Plot 3.")
 else:
     print("\nPyVista continuous shell mesh summary:")
     print(f"  Total measurement points: {len(all_points)}")
-    print(f"  Nodes used: {len(nodes)}")
-    print(f"  Point IDs: {point_ids[0]}..{point_ids[-1]}")
+    print(f"  Mesh nodes used: {mesh.n_points}")
     print(f"  Faces: {mesh.n_cells}")
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     plot_pyvista_shell_with_point_ids(
