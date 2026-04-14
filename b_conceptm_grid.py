@@ -43,7 +43,7 @@ class TunnelGridConfig:
     x_len: float = 100.0
     y_len: float = 100.0
     z_len: float = 100.0
-    nlay: int = 10
+    nlay: int = 100
     nrow_base: int = 10
     ncol_base: int = 10
     top: float = 0.0

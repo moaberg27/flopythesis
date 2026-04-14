@@ -13,6 +13,8 @@ import geopandas as gpd
 from flopy.export.vtk import Vtk
 from shapely.geometry import Polygon
 
+import matplotlib.pyplot as plt
+
 from tunnel import (
     TUNNEL_CENTER_DEPTH_M,
     TUNNEL_RADIUS_M,
@@ -243,6 +245,33 @@ def plot_continuum_model_with_tunnel(gwf: flopy.mf6.ModflowGwf) -> None:
     print(f"Saved continuum model plot with tunnel to: {output_path}")
 
 
+def plot_tunnel_inflow_profile(inflow_df: pd.DataFrame, output_dir: Path) -> None:
+    """Plot inflow per tunnel segment along the tunnel centerline."""
+    # Calculate cumulative distance along the tunnel for each segment
+    # Use segment_center_x/y for this
+    x = inflow_df["segment_center_x_m"].values
+    y = inflow_df["segment_center_y_m"].values
+    xy = np.column_stack([x, y])
+    dists = np.sqrt(np.sum(np.diff(xy, axis=0)**2, axis=1))
+    cumdist = np.concatenate([[0], np.cumsum(dists)])
+
+    inflow = inflow_df["inflow_m3_d"].values  # daily inflow per segment
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(cumdist, inflow, marker="o", linestyle="-", label="Inflow per segment [m³/d]")
+    plt.xlabel("Distance along tunnel centerline [m]")
+    plt.ylabel("Inflow per segment [m³/d]")
+    plt.title("Tunnel inflow distribution along centerline")
+    plt.grid(True)
+    plt.legend()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    outpath = output_dir / "tunnel_inflow_profile.png"
+    plt.tight_layout()
+    plt.savefig(outpath)
+    plt.close()
+    print(f"Saved tunnel inflow profile plot to: {outpath}")
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if not (OUTPUT_DIR / "tunnel.shp").exists():
@@ -264,7 +293,9 @@ def main() -> None:
         f"Total inflow: {total_inflow_m3_s:.6e} m3/s ({total_inflow_m3_d:.6e} m3/d)")
     print(f"Saved detailed inflow table to: {OUTPUT_CSV}")
 
+
     plot_continuum_model_with_tunnel(gwf)
+    plot_tunnel_inflow_profile(inflow_df, IMAGES_DIR)
 
 
 if __name__ == "__main__":
