@@ -43,7 +43,7 @@ class TunnelGridConfig:
     x_len: float = 100.0
     y_len: float = 100.0
     z_len: float = 100.0
-    nlay: int = 100
+    nlay: int = 9
     nrow_base: int = 10
     ncol_base: int = 10
     top: float = 0.0
@@ -89,7 +89,11 @@ class TunnelGridConfig:
 
     @property
     def botm(self) -> np.ndarray:
-        return np.linspace(-self.z_len / self.nlay, -self.z_len, self.nlay)
+        # Evenly spaced bottoms from top to bottom
+        botm = np.linspace(self.top - self.z_len / self.nlay, self.top - self.z_len, self.nlay)
+        print(f"DEBUG: botm array: {botm}")
+        print(f"DEBUG: botm shape: {botm.shape}, nlay: {self.nlay}")
+        return botm
 
 
 def load_tunnel_geometry(cfg: TunnelGridConfig) -> BaseGeometry:
@@ -320,14 +324,27 @@ def plot_simulation_results(cfg: TunnelGridConfig, gwf: flopy.mf6.ModflowGwf) ->
     grid["boundary"] = ibd.flatten()
 
     # Plot results
+    # Use a diverging colormap for head, centered at mean
+    import matplotlib.pyplot as plt
+    head_vals = grid["head"]
+    vcenter = np.nanmean(head_vals)
+    # Use coolwarm, center at mean
+    from matplotlib.colors import TwoSlopeNorm
+    norm = TwoSlopeNorm(vmin=np.nanmin(head_vals), vcenter=vcenter, vmax=np.nanmax(head_vals))
     scalars_list = ["head", "k", "k33", "boundary"]
-    cmaps_list = ["viridis", "plasma", "plasma", "coolwarm"]
+    cmaps_list = ["coolwarm", "plasma", "plasma", "coolwarm"]
 
     for scalar_name, cmap in zip(scalars_list, cmaps_list):
         p = pv.Plotter()
-        p.add_mesh(
-            grid, scalars=scalar_name, cmap=cmap, show_edges=False, opacity=1.0
-        )
+        if scalar_name == "head":
+            p.add_mesh(
+                grid, scalars=scalar_name, cmap=cmap, show_edges=False, opacity=1.0, clim=[np.nanmin(head_vals), np.nanmax(head_vals)], scalar_bar_args={"title": scalar_name},
+                nan_color="gray",
+                )
+        else:
+            p.add_mesh(
+                grid, scalars=scalar_name, cmap=cmap, show_edges=False, opacity=1.0
+            )
         p.add_axes()
         p.show(title=f"Tunnel-refined grid: {scalar_name}")
 
@@ -356,19 +373,55 @@ def build_flopy_disv_model(cfg: TunnelGridConfig, gridprops: dict) -> tuple[flop
         save_specific_discharge=True,
     )
 
-    # Create simple left-right CHD boundary based on x center in DISV cells.
-    xc = np.asarray(gwf.modelgrid.xcellcenters).ravel()
+
+    # Tunnel CHD assignment
+    from shapely.geometry import Point, Polygon
+    from tunnel import build_tunnel_polygon, TUNNEL_CENTER_DEPTH_M, TUNNEL_RADIUS_M
+    tunnel_poly = build_tunnel_polygon()
     ncpl = int(gridprops["ncpl"])
-    chd_spd = []
+    chd_dict = {}  # (lay, icpl): head
+    tunnel_top = cfg.top - (TUNNEL_CENTER_DEPTH_M - TUNNEL_RADIUS_M)
+    tunnel_bot = cfg.top - (TUNNEL_CENTER_DEPTH_M + TUNNEL_RADIUS_M)
+    # print("\n--- Tunnel CHD assignment debug ---")
+    # tunnel_chd_count = 0
+    xc = np.asarray(gwf.modelgrid.xcellcenters).ravel()
+    for icpl in range(ncpl):
+        verts = gwf.modelgrid.get_cell_vertices(icpl)
+        poly = Polygon(verts)
+        centroid = poly.centroid
+        pt = Point(centroid.x, centroid.y)
+        for lay in range(cfg.nlay):
+            # Get z center of this cell
+            if hasattr(gwf.modelgrid, "zcentroid"):
+                zc = gwf.modelgrid.zcentroid[lay, icpl]
+            else:
+                # fallback: average of top/botm
+                ztop = gwf.modelgrid.top[icpl] if lay == 0 else gwf.modelgrid.botm[lay-1, icpl]
+                zbot = gwf.modelgrid.botm[lay, icpl]
+                zc = 0.5 * (ztop + zbot)
+            if tunnel_poly.contains(pt) and (tunnel_bot <= zc <= tunnel_top):
+                chd_dict[(lay, icpl)] = 0.0  # Tunnel boundary takes priority
+                # Debug print suppressed
+                # tunnel_chd_count += 1
+    # print(f"Total tunnel CHD cells assigned: {tunnel_chd_count}")
+
+
+    # Add left/right face CHD boundaries (100.0/90.0) only if not already set by tunnel
+    # Tunnel CHD always takes priority!
     for icpl in range(ncpl):
         on_left = xc[icpl] <= cfg.delr
         on_right = xc[icpl] >= (cfg.x_len - cfg.delr)
-        if on_left or on_right:
-            for lay in range(cfg.nlay):
-                if on_left:
-                    chd_spd.append(((lay, icpl), 100.0))
-                if on_right:
-                    chd_spd.append(((lay, icpl), 90.0))
+        for lay in range(cfg.nlay):
+            key = (lay, icpl)
+            if key in chd_dict:
+                # Tunnel CHD already set for this cell, skip side boundary
+                continue
+            if on_left:
+                chd_dict[key] = 100.0
+            elif on_right:
+                chd_dict[key] = 90.0
+
+    chd_spd = [ (key, value) for key, value in chd_dict.items() ]
 
     if chd_spd:
         flopy.mf6.ModflowGwfchd(gwf, stress_period_data=chd_spd)
