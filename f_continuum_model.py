@@ -69,6 +69,8 @@ RUN_MODEL = True
 PLOT_WITH_PYVISTA = True
 SHOW_PYVISTA_INTERACTIVE = True
 SHOW_PYVISTA_HEAD_ONLY_INTERACTIVE = True
+CONTINUUM_TENSOR_OPACITY = 0.65
+CONTINUUM_HEAD_OPACITY = 0.55
 
 # Optional 2D layer map (this is where "layer 9" came from).
 PLOT_2D_LAYER_MAP = False
@@ -366,7 +368,7 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
     out_png = IMAGES_DIR / "continuum_model_pyvista.png"
     plotter = pv.Plotter(off_screen=True)
     plotter.add_mesh(tensor_ellipsoid, scalars="tensor_value", cmap="viridis",
-                     opacity=0.95, show_edges=False)
+                     opacity=CONTINUUM_TENSOR_OPACITY, show_edges=False)
     for arrow, color in arrows:
         plotter.add_mesh(arrow, color=color, opacity=0.8)
     plotter.add_scalar_bar(title="tensor_value")
@@ -380,7 +382,7 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
     if SHOW_PYVISTA_INTERACTIVE:
         plotter2 = pv.Plotter()
         plotter2.add_mesh(tensor_ellipsoid, scalars="tensor_value", cmap="viridis",
-                          opacity=0.95, show_edges=False)
+                          opacity=CONTINUUM_TENSOR_OPACITY, show_edges=False)
         for arrow, color in arrows:
             plotter2.add_mesh(arrow, color=color, opacity=0.8)
         plotter2.add_scalar_bar(title="tensor_value")
@@ -394,7 +396,7 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
 
     plotter_head = pv.Plotter(off_screen=True)
     plotter_head.add_mesh(grid, scalars=scalar_name, cmap=cmap,
-                          show_edges=True, opacity=1.0)
+                          show_edges=True, opacity=CONTINUUM_HEAD_OPACITY)
     plotter_head.add_scalar_bar(title=scalar_name)
     plotter_head.add_axes()
     plotter_head.show_grid()
@@ -405,7 +407,7 @@ def plot_continuum_with_pyvista(sim: flopy.mf6.MFSimulation, k_tensor: np.ndarra
     if SHOW_PYVISTA_HEAD_ONLY_INTERACTIVE:
         plotter_head2 = pv.Plotter()
         plotter_head2.add_mesh(grid, scalars=scalar_name, cmap=cmap,
-                               show_edges=True, opacity=1.0)
+                               show_edges=True, opacity=CONTINUUM_HEAD_OPACITY)
         plotter_head2.add_scalar_bar(title=scalar_name)
         plotter_head2.add_axes()
         plotter_head2.show_grid()
