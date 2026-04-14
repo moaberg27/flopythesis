@@ -43,7 +43,7 @@ class TunnelGridConfig:
     x_len: float = 100.0
     y_len: float = 100.0
     z_len: float = 100.0
-    nlay: int = 9
+    nlay: int = 40
     nrow_base: int = 10
     ncol_base: int = 10
     top: float = 0.0
@@ -89,10 +89,16 @@ class TunnelGridConfig:
 
     @property
     def botm(self) -> np.ndarray:
-        # Evenly spaced bottoms from top to bottom
-        botm = np.linspace(self.top - self.z_len / self.nlay, self.top - self.z_len, self.nlay)
-        print(f"DEBUG: botm array: {botm}")
-        print(f"DEBUG: botm shape: {botm.shape}, nlay: {self.nlay}")
+        # Vertically refined: very thin layers at tunnel, thicker above/below
+        tunnel_top = self.top - (80.0 - 4.0)  # 80 = TUNNEL_CENTER_DEPTH_M, 4 = TUNNEL_RADIUS_M
+        tunnel_bot = self.top - (80.0 + 4.0)
+        nlay_above = 15
+        nlay_tunnel = 10
+        nlay_below = self.nlay - nlay_above - nlay_tunnel
+        above = np.linspace(self.top, tunnel_top, nlay_above + 1, endpoint=True)[1:]
+        tunnel = np.linspace(tunnel_top, tunnel_bot, nlay_tunnel + 1, endpoint=True)[1:]
+        below = np.linspace(tunnel_bot, self.top - self.z_len, nlay_below + 1, endpoint=True)[1:]
+        botm = np.concatenate([above, tunnel, below])
         return botm
 
 
@@ -417,9 +423,9 @@ def build_flopy_disv_model(cfg: TunnelGridConfig, gridprops: dict) -> tuple[flop
                 # Tunnel CHD already set for this cell, skip side boundary
                 continue
             if on_left:
-                chd_dict[key] = 100.0
+                chd_dict[key] = 0.0
             elif on_right:
-                chd_dict[key] = 90.0
+                chd_dict[key] = 100.0
 
     chd_spd = [ (key, value) for key, value in chd_dict.items() ]
 
