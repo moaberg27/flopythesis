@@ -67,6 +67,7 @@ def mock_dfn_isotropic(active_faces):
 # ============================================================
 tilt_y_angles = list(range(15, 90, 15))  # 15, 30, ..., 75
 z_angles = list(range(15, 90, 15))  # 15, 30, ..., 75
+z_angles_no_tilt = list(range(15, 90, 15))  # 15, 30, ..., 75
 
 points = []
 dirs = []
@@ -121,6 +122,15 @@ add_measurements(
     ["+x", "-x", "+y", "-y", "+z", "-z"],
     "start",
 )
+
+# Första steget utan tilt: rotera bara i xy-planet och spara ±x, ±y.
+for z_deg_no_tilt in z_angles_no_tilt:
+    R_xy_no_tilt = rotation_matrix_zxy(z_deg_no_tilt, 0, 0)
+    add_measurements(
+        R_xy_no_tilt,
+        ["+x", "-x", "+y", "-y"],
+        f"base_z{z_deg_no_tilt}",
+    )
 
 for tilt_y_deg in tilt_y_angles:
     R_tilt = rotation_matrix_zxy(0, 0, tilt_y_deg)
@@ -206,7 +216,7 @@ A = np.column_stack([
 ])
 
 print("Rank(A):", np.linalg.matrix_rank(A))
-expected_points = 6 + len(tilt_y_angles) * \
+expected_points = 6 + 4 * len(z_angles_no_tilt) + len(tilt_y_angles) * \
     (4 + 6 * len(z_angles)) + 4 + 4 * \
     len(z_angles_step3) + len(tilt_x_angles_step4) * \
     (4 + 4 * len(z_angles_step4))
@@ -238,8 +248,9 @@ markers = ["o", "^", "s", "D", "P", "X"]
 # Återanvänd överlappande ±y-värden i visualiseringen: plotta bara första unika.
 plot_mask = np.ones(len(points), dtype=bool)
 seen_y_keys = set()
-for i, (p, face) in enumerate(zip(points, face_ids)):
-    if face in ["+y", "-y"]:
+for i, (p, face, rot_label) in enumerate(zip(points, face_ids, rot_ids)):
+    keep_initial_xy = str(rot_label) == "start" or str(rot_label).startswith("base_z")
+    if face in ["+y", "-y"] and not keep_initial_xy:
         y_key = tuple(np.round(p, 8))
         if y_key in seen_y_keys:
             plot_mask[i] = False
@@ -250,6 +261,11 @@ points_plot = points[plot_mask]
 rot_ids_plot = rot_ids[plot_mask]
 face_ids_plot = np.array(face_ids)[plot_mask]
 colors_plot = colors[plot_mask]
+
+# Visnings-offset: separerar överlappande punkter utan att ändra beräkningen.
+points_plot_display = points_plot.copy()
+for i, face in enumerate(face_ids_plot):
+    points_plot_display[i] = points_plot_display[i] + 0.03 * FACE_AXES[face]
 
 print("Plotted points after y-reuse:", len(points_plot))
 if np.any(rot_ids == "tilt_y30_z30"):
@@ -264,9 +280,9 @@ for i, rot_label in enumerate(rot_order):
     if np.sum(mask) == 0:
         continue
     ax.scatter(
-        points_plot[mask, 0],
-        points_plot[mask, 1],
-        points_plot[mask, 2],
+        points_plot_display[mask, 0],
+        points_plot_display[mask, 1],
+        points_plot_display[mask, 2],
         c=colors_plot[mask],
         s=60,
         alpha=0.95,
@@ -278,7 +294,7 @@ for i, rot_label in enumerate(rot_order):
     )
 
 # Etiketter gör att överlappande punkter ändå kan identifieras.
-for p, rot_label, face in zip(points_plot, rot_ids_plot, face_ids_plot):
+for p, rot_label, face in zip(points_plot_display, rot_ids_plot, face_ids_plot):
     ax.text(
         p[0] + 0.03,
         p[1] + 0.03,
