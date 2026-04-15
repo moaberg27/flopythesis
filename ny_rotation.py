@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 # ============================================================
 # Rotation utilities
 # ============================================================
+# Building rotation matricies for Z–X–Y convention
 
 
 def rotation_matrix_zxy(z_deg, x_deg, y_deg):
@@ -41,7 +42,7 @@ FACE_AXES = {
 }
 
 FACE_COLORS = {
-    "+x": "#e63946",
+    "+x": "#eb1224",
     "-x": "#d00000",
     "+y": "#457b9d",
     "-y": "#1d3557",
@@ -65,6 +66,7 @@ def mock_dfn_isotropic(active_faces):
 # ============================================================
 # Rotation setup: bas + upprepad tilt i xz-plan + rotation i xy-plan
 # ============================================================
+# ändra nman på rotationsreglerna
 tilt_y_angles = list(range(15, 90, 15))  # 15, 30, ..., 75
 z_angles = list(range(15, 90, 15))  # 15, 30, ..., 75
 z_angles_no_tilt = list(range(15, 90, 15))  # 15, 30, ..., 75
@@ -75,6 +77,11 @@ colors = []
 rot_ids = []
 face_ids = []
 
+FACES_ALL = ["+x", "-x", "+y", "-y", "+z", "-z"]
+FACES_XY = ["+x", "-x", "+y", "-y"]
+FACES_XZ = ["+x", "-x", "+z", "-z"]
+FACES_YZ = ["+y", "-y", "+z", "-z"]
+
 # Plotinställningar för legend.
 SHOW_LEGEND = False
 LEGEND_LOC = "upper left"
@@ -83,6 +90,7 @@ LEGEND_LOC = "upper left"
 # ============================================================
 # Hjälpfunktion: beräkna och lagra mätpunkter
 # ============================================================
+# Vad händr här?
 def add_measurements(R, active_faces, rot_label):
     dfn_results = mock_dfn_isotropic(active_faces)
 
@@ -107,36 +115,54 @@ def add_measurements(R, active_faces, rot_label):
         colors.append(FACE_COLORS[face])
 
 
+def add_yz_then_xy_sequence(step_name, tilt_x_deg, z_values):
+    """Run one yz-tilt sequence followed by xy-rotations at fixed z angles."""
+    r_yz = rotation_matrix_zxy(0, tilt_x_deg, 0)
+    add_measurements(r_yz, FACES_YZ, f"{step_name}_yz_x{tilt_x_deg}")
+
+    for z_deg in z_values:
+        r_xy = rotation_matrix_zxy(z_deg, 0, 0)
+        r_combined = r_xy @ r_yz
+        add_measurements(
+            r_combined,
+            FACES_YZ,
+            f"{step_name}_yz_x{tilt_x_deg}_xy_z{z_deg}",
+        )
+
+
 # ============================================================
 # Huvudsteg:
-# 1) Startläge: spara ±x, ±y, ±z
+# 1) Startläge: spara ±x, ±y, ±z (ger 6 värden)
 # 2) För varje tilt i xz-planet (rotation runt y): spara ±x, ±z
-# 3) Från varje tiltat läge: rotera i xy-planet runt z till 75°: spara ±x, ±y, ±z
+# 3) Från varje tiltat läge: rotera i xy-planet runt z till 75°: spara ±x, ±y
 # 4) Ny tredje sekvens från normalläge:
 #    - Tilt 15° i yz-led (rotation runt x): spara ±y, ±z
 #    - Rotera vidare i xy-led till 75° (rotation runt z), behåll yz-tilt: spara ±y, ±z
 # ============================================================
+
+# 1) Startläge: spara ±x, ±y, ±z (ger 6 värden) np.eye ger en rotationsmatris fylld med 0 runtom och 1 på diagonalen, dvs ingen rotation.
 R_start = np.eye(3)
 add_measurements(
     R_start,
-    ["+x", "-x", "+y", "-y", "+z", "-z"],
+    FACES_ALL,
     "start",
 )
 
-# Första steget utan tilt: rotera bara i xy-planet och spara ±x, ±y.
+# 2) Rotation utan tilt: rotera bara i xy-planet och spara ±x, ±y.
 for z_deg_no_tilt in z_angles_no_tilt:
     R_xy_no_tilt = rotation_matrix_zxy(z_deg_no_tilt, 0, 0)
     add_measurements(
         R_xy_no_tilt,
-        ["+x", "-x", "+y", "-y"],
+        FACES_XY,
         f"base_z{z_deg_no_tilt}",
     )
 
+# 3) För varje tilt i xz-planet (rotation runt y): spara ±x, ±z
 for tilt_y_deg in tilt_y_angles:
     R_tilt = rotation_matrix_zxy(0, 0, tilt_y_deg)
     add_measurements(
         R_tilt,
-        ["+x", "-x", "+z", "-z"],
+        FACES_XZ,
         f"tilt_y{tilt_y_deg}",
     )
 
@@ -145,50 +171,21 @@ for tilt_y_deg in tilt_y_angles:
         R_combined = R_xy @ R_tilt
         add_measurements(
             R_combined,
-            ["+x", "-x", "+y", "-y", "+z", "-z"],
+            FACES_ALL,
             f"tilt_y{tilt_y_deg}_z{z_deg}",
         )
 
 # Tredje steg: ny sekvens som startar om från normalläge.
 tilt_x_deg_step3 = 15
 z_angles_step3 = list(range(15, 90, 15))  # 15, 30, ..., 75
-
-R_step3_yz = rotation_matrix_zxy(0, tilt_x_deg_step3, 0)
-add_measurements(
-    R_step3_yz,
-    ["+y", "-y", "+z", "-z"],
-    f"step3_yz_x{tilt_x_deg_step3}",
-)
-
-for z_deg_step3 in z_angles_step3:
-    R_step3_xy = rotation_matrix_zxy(z_deg_step3, 0, 0)
-    R_step3_combined = R_step3_xy @ R_step3_yz
-    add_measurements(
-        R_step3_combined,
-        ["+y", "-y", "+z", "-z"],
-        f"step3_yz_x{tilt_x_deg_step3}_xy_z{z_deg_step3}",
-    )
+add_yz_then_xy_sequence("step3", tilt_x_deg_step3, z_angles_step3)
 
 # Fjärde steg: upprepa samma sekvens för yz = 30, 45, 60, 75.
 tilt_x_angles_step4 = [30, 45, 60, 75]
 z_angles_step4 = [15, 30, 45, 50, 75]
 
 for tilt_x_deg_step4 in tilt_x_angles_step4:
-    R_step4_yz = rotation_matrix_zxy(0, tilt_x_deg_step4, 0)
-    add_measurements(
-        R_step4_yz,
-        ["+y", "-y", "+z", "-z"],
-        f"step4_yz_x{tilt_x_deg_step4}",
-    )
-
-    for z_deg_step4 in z_angles_step4:
-        R_step4_xy = rotation_matrix_zxy(z_deg_step4, 0, 0)
-        R_step4_combined = R_step4_xy @ R_step4_yz
-        add_measurements(
-            R_step4_combined,
-            ["+y", "-y", "+z", "-z"],
-            f"step4_yz_x{tilt_x_deg_step4}_xy_z{z_deg_step4}",
-        )
+    add_yz_then_xy_sequence("step4", tilt_x_deg_step4, z_angles_step4)
 
 
 # ============================================================
@@ -216,6 +213,7 @@ A = np.column_stack([
 ])
 
 print("Rank(A):", np.linalg.matrix_rank(A))
+# Dubbelkolla ifall nått tal inte gick att lösa
 expected_points = 6 + 4 * len(z_angles_no_tilt) + len(tilt_y_angles) * \
     (4 + 6 * len(z_angles)) + 4 + 4 * \
     len(z_angles_step3) + len(tilt_x_angles_step4) * \
@@ -249,7 +247,8 @@ markers = ["o", "^", "s", "D", "P", "X"]
 plot_mask = np.ones(len(points), dtype=bool)
 seen_y_keys = set()
 for i, (p, face, rot_label) in enumerate(zip(points, face_ids, rot_ids)):
-    keep_initial_xy = str(rot_label) == "start" or str(rot_label).startswith("base_z")
+    keep_initial_xy = str(rot_label) == "start" or str(
+        rot_label).startswith("base_z")
     if face in ["+y", "-y"] and not keep_initial_xy:
         y_key = tuple(np.round(p, 8))
         if y_key in seen_y_keys:
