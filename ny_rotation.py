@@ -107,6 +107,9 @@ def add_measurements(R, active_faces, rot_label):
 # 1) Startläge: spara ±x, ±y, ±z
 # 2) För varje tilt i xz-planet (rotation runt y): spara ±x, ±z
 # 3) Från varje tiltat läge: rotera i xy-planet runt z till 75°: spara ±x, ±y, ±z
+# 4) Ny tredje sekvens från normalläge:
+#    - Tilt 15° i yz-led (rotation runt x): spara ±y, ±z
+#    - Rotera vidare i xy-led till 75° (rotation runt z), behåll yz-tilt: spara ±y, ±z
 # ============================================================
 R_start = np.eye(3)
 add_measurements(
@@ -131,6 +134,26 @@ for tilt_y_deg in tilt_y_angles:
             ["+x", "-x", "+y", "-y", "+z", "-z"],
             f"tilt_y{tilt_y_deg}_z{z_deg}",
         )
+
+# Tredje steg: ny sekvens som startar om från normalläge.
+tilt_x_deg_step3 = 15
+z_angles_step3 = list(range(15, 90, 15))  # 15, 30, ..., 75
+
+R_step3_yz = rotation_matrix_zxy(0, tilt_x_deg_step3, 0)
+add_measurements(
+    R_step3_yz,
+    ["+y", "-y", "+z", "-z"],
+    f"step3_yz_x{tilt_x_deg_step3}",
+)
+
+for z_deg_step3 in z_angles_step3:
+    R_step3_xy = rotation_matrix_zxy(z_deg_step3, 0, 0)
+    R_step3_combined = R_step3_xy @ R_step3_yz
+    add_measurements(
+        R_step3_combined,
+        ["+y", "-y", "+z", "-z"],
+        f"step3_yz_x{tilt_x_deg_step3}_xy_z{z_deg_step3}",
+    )
 
 
 # ============================================================
@@ -158,7 +181,8 @@ A = np.column_stack([
 ])
 
 print("Rank(A):", np.linalg.matrix_rank(A))
-expected_points = 6 + len(tilt_y_angles) * (4 + 6 * len(z_angles))
+expected_points = 6 + len(tilt_y_angles) * \
+    (4 + 6 * len(z_angles)) + 4 + 4 * len(z_angles_step3)
 print("Total points:", len(points), f"(expected {expected_points})")
 
 rot_order = list(dict.fromkeys(rot_ids.tolist()))
@@ -248,7 +272,7 @@ ax.set_ylabel("Ky")
 ax.set_zlabel("Kz")
 ax.set_title(
     "Directional conductivity from flow experiments\n"
-    "(start + repeated tilt in xz + rotation in xy)"
+    "(start + repeated tilt in xz + rotation in xy + extra yz->xy step)"
 )
 ax.legend(loc="upper left", fontsize=8)
 
