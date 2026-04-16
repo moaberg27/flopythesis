@@ -7,6 +7,7 @@ from pathlib import Path
 # ============================================================
 # Building rotation matricies for Z–X–Y convention
 
+
 def rotation_matrix_zxy(z_deg, x_deg, y_deg):
     z, x, y = np.radians([z_deg, x_deg, y_deg])
 
@@ -30,7 +31,7 @@ def rotation_matrix_zxy(z_deg, x_deg, y_deg):
 
 
 # ============================================================
-# Box faces (local normals) [z,x,y] 
+# Box faces (local normals) [z,x,y]
 # ============================================================
 FACE_AXES = {
     "+x": np.array([1,  0,  0]),
@@ -192,7 +193,6 @@ def add_measurements(R, active_faces, rot_label):
         colors.append(FACE_COLORS[face])
 
 
-
 # ============================================================
 # Huvudsteg:
 # 1) Startläge: spara ±x, ±y, ±z (ger 6 värden)
@@ -203,7 +203,6 @@ def add_measurements(R, active_faces, rot_label):
 #    - Tilt 15° i yz-led (rotation runt x): spara ±y, ±z
 #    - Rotera vidare i xy-led till 75° (rotation runt z), behåll yz-tilt: spara ±y, ±z
 # ============================================================
-
 # 1) Startläge: spara ±x, ±y, ±z (ger 6 värden) np.eye ger en rotationsmatris fylld med 0 runtom och 1 på diagonalen, dvs ingen rotation.
 R_start = np.eye(3)
 add_measurements(
@@ -242,7 +241,7 @@ for tilt_y_deg in tilt_y_angles:
 
 def add_yz_then_xy_sequence(step_name, tilt_x_deg, z_values):
     """Run one yz-tilt sequence followed by xy-rotations at fixed z angles."""
-    # Step one, create tilt in yz plane 
+    # Step one, create tilt in yz plane
     r_yz = rotation_matrix_zxy(0, tilt_x_deg, 0)
     add_measurements(r_yz, FACES_YZ, f"{step_name}_yz_x{tilt_x_deg}")
 
@@ -256,21 +255,16 @@ def add_yz_then_xy_sequence(step_name, tilt_x_deg, z_values):
             f"{step_name}_yz_x{tilt_x_deg}_xy_z{z_deg}",
         )
 
-# Tredje steg: ny sekvens som startar om från normalläge.
-tilt_x_deg_step3 = 15
+
+# Tredje steg: ny sekvens som startar om från normalläge och kör yz = 15, 30, 45, 60, 75.
+tilt_x_angles_step3 = list(range(15, 90, 15))  # 15, 30, ..., 75
 z_angles_step3 = list(range(15, 90, 15))  # 15, 30, ..., 75
-add_yz_then_xy_sequence("step3", tilt_x_deg_step3, z_angles_step3)
 
-# Fjärde steg: upprepa samma sekvens för yz = 30, 45, 60, 75.
-tilt_x_angles_step4 = [30, 45, 60, 75]
-z_angles_step4 = [15, 30, 45, 50, 75]
-
-for tilt_x_deg_step4 in tilt_x_angles_step4:
-    add_yz_then_xy_sequence("step4", tilt_x_deg_step4, z_angles_step4)
-
+for tilt_x_deg in tilt_x_angles_step3:
+    add_yz_then_xy_sequence("step3", tilt_x_deg, z_angles_step3)
 
 # ============================================================
-# Samla data
+# Store data
 # ============================================================
 points = np.array(points)
 dirs = np.array(dirs)
@@ -325,9 +319,8 @@ print(
 )
 # Dubbelkolla ifall nått tal inte gick att lösa
 expected_points = 6 + 4 * len(z_angles_no_tilt) + len(tilt_y_angles) * \
-    (4 + 6 * len(z_angles)) + 4 + 4 * \
-    len(z_angles_step3) + len(tilt_x_angles_step4) * \
-    (4 + 4 * len(z_angles_step4))
+    (4 + 6 * len(z_angles)) + len(tilt_x_angles_step3) * \
+    (4 + 4 * len(z_angles_step3))
 print("Total points:", len(points), f"(expected {expected_points})")
 
 rot_order = list(dict.fromkeys(rot_ids.tolist()))
