@@ -344,7 +344,7 @@ def plot_simulation_results(cfg: TunnelGridConfig, gwf: flopy.mf6.ModflowGwf) ->
         p = pv.Plotter()
         if scalar_name == "head":
             p.add_mesh(
-                grid, scalars=scalar_name, cmap=cmap, show_edges=False, opacity=1.0, clim=[np.nanmin(head_vals), np.nanmax(head_vals)], scalar_bar_args={"title": scalar_name},
+                grid, scalars=scalar_name, cmap=cmap, show_edges=False, opacity=0.6, clim=[np.nanmin(head_vals), np.nanmax(head_vals)], scalar_bar_args={"title": scalar_name},
                 nan_color="gray",
                 )
         else:
