@@ -1,7 +1,7 @@
 # WORKFLOW:
-#   1. precompute_directions()  — instant, tells you how many DFN runs needed
+#   1. precompute_directions()  — tells you how many DFN runs needed
 #   2. split_directions()       — split into fit / validation sets
-#   3. run_dfn_simulation()     — expensive, called once per unique direction
+#   3. run_dfn_simulation()     — called once per unique direction
 #   4. fit_conductivity_tensor()— least-squares fit from the k values
 #   5. plotting                 — visualise the fitted ellipsoid
 
@@ -15,21 +15,14 @@ import matplotlib.pyplot as plt
 # =====================================================================
 # True principal values — ONLY used by the synthetic placeholder below.
 # In real use, you don't know these (that's what you're solving for).
-K_PRINCIPAL = np.array([6.0, 3.0, 1.0])   # kx, ky, kz
+K_PRINCIPAL = np.array([3.0, 3.0, 3.0])   # kx, ky, kz
 
-# True directional porosity principal values — ONLY used by the synthetic placeholder.
-# Porosity is also anisotropic in a fractured medium: phi(n) = n^T Phi n
-PHI_PRINCIPAL = np.array([0.15, 0.10, 0.05])  # phi_x, phi_y, phi_z
-
-# Box geometry — used to convert flux + travel time to porosity
-BOX_LENGTH = 1.0   # [m]  length of the REV cube along each axis
-BOX_AREA   = BOX_LENGTH ** 2   # [m²] face area (cubic box)
-HYDR_GRAD  = 1.0   # [m/m] unit hydraulic gradient applied across the box
-N_PARTICLES = 50   # number of particles used in synthetic particle tracking
-
-# This function simulates running a DFN flow simulation for a given rotation and face index, returning an effective conductivity. 
+# This function simulates running a DFN flow simulation for a given rotation and face index, returning an effective conductivity.
+#  
 # In practice, replace the body of this function with a call to your actual DFN solver, passing the appropriate rotation and gradient axis parameters.
+
 # Phi is the azimuthal rotation around Z, and theta is the elevation rotation around X. 
+
 # The face_index determines which pair of faces (±X, ±Y, or ±Z) the pressure gradient is applied to in the local frame of the domain.
 # If 0, the gradient is along local X (faces ±X); if 1, along local Y (faces ±Y); if 2, along local Z (faces ±Z).
 def run_dfn_simulation(phi_deg, theta_deg, face_index):
@@ -59,6 +52,7 @@ def run_dfn_simulation(phi_deg, theta_deg, face_index):
                                      gradient_axis=face_index)
         return result.equivalent_conductivity
     """
+    # R is the rotation matrix that transforms local face normals to lab frame directions based on the specified phi and theta rotations.
     R = rotation_matrix('x', theta_deg) @ rotation_matrix('z', phi_deg)
     n_lab = R @ FACE_NORMALS_LOCAL[face_index] # takes a local axis and rotates it to the lab frame, giving the measurement direction in the lab frame
     k_eff = (K_PRINCIPAL[0] * n_lab[0]**2 +
@@ -66,64 +60,6 @@ def run_dfn_simulation(phi_deg, theta_deg, face_index):
              K_PRINCIPAL[2] * n_lab[2]**2)
     noise = 1.0 - np.random.rand() / 5   # +-20 % variability
     return k_eff * noise
-
-
-def run_porosity_simulation(phi_deg, theta_deg, face_index):
-    """
-    Estimate directional kinematic porosity from a DFN run.
-
-    Workflow (replace the body with your real solver calls):
-      1. Total flux Q  [m³/s]  from the flow simulation
-      2. Darcy flux    q = Q / A_face
-      3. Particle tracking → travel times → median time  t_med
-      4. Pore velocity v = L / t_med
-      5. Porosity      phi = q / v   (= q * t_med / L)
-
-    Parameters
-    ----------
-    phi_deg, theta_deg : float
-        Same rotation as the companion conductivity run.
-    face_index : int
-        Which face pair the gradient is applied to (0=X, 1=Y, 2=Z).
-
-    Returns
-    -------
-    phi_eff : float
-        Effective kinematic porosity in that direction.
-    """
-    R = rotation_matrix('x', theta_deg) @ rotation_matrix('z', phi_deg)
-    n_lab = R @ FACE_NORMALS_LOCAL[face_index]
-
-    # --- Step 1: effective conductivity for this direction ---
-    k_eff = (K_PRINCIPAL[0] * n_lab[0]**2 +
-             K_PRINCIPAL[1] * n_lab[1]**2 +
-             K_PRINCIPAL[2] * n_lab[2]**2)
-    k_noise = 1.0 - np.random.rand() / 5
-    k_eff  *= k_noise
-
-    # --- Step 2: total flux Q and Darcy flux q ---
-    Q = k_eff * HYDR_GRAD * BOX_AREA   # Darcy's law: Q = K * i * A
-    q = Q / BOX_AREA                    # Darcy flux [m/s]
-
-    # --- Step 3: synthetic particle tracking ---
-    # True directional porosity (what the DFN would give)
-    phi_true = (PHI_PRINCIPAL[0] * n_lab[0]**2 +
-                PHI_PRINCIPAL[1] * n_lab[1]**2 +
-                PHI_PRINCIPAL[2] * n_lab[2]**2)
-    phi_true = max(phi_true, 1e-6)  # guard against zero
-
-    # Pore velocity for each synthetic particle (with ±10 % spread)
-    v_pore = q / phi_true
-    particle_times = (BOX_LENGTH / v_pore) * (
-        1.0 + 0.1 * (np.random.rand(N_PARTICLES) - 0.5)
-    )
-    t_med = np.median(particle_times)   # median travel time
-
-    # --- Step 4 & 5: back-calculate porosity ---
-    v_eff   = BOX_LENGTH / t_med        # effective pore velocity
-    phi_eff = q / v_eff                 # porosity = q / v
-
-    return phi_eff
 
 
 def rotation_matrix(axis, angle_deg):
@@ -134,10 +70,6 @@ def rotation_matrix(axis, angle_deg):
         return np.array([[1, 0,  0], 
                          [0, c, -s],
                          [0, s,  c]])
-    elif axis == 'y': # rotation around Y-axis
-        return np.array([[ c, 0, s],
-                         [ 0, 1, 0],
-                         [-s, 0, c]])
     elif axis == 'z': # rotation around Z-axis
         return np.array([[c, -s, 0],
                          [s,  c, 0],
@@ -174,7 +106,7 @@ def build_design_matrix(directions):
 
 def precompute_directions(rotations):
     """
-    PHASE 1 — Precompute unique measurement directions (instant, no DFN cost).
+    PHASE 1 — Precompute unique measurement directions (no DFN cost).
 
     Rotates the box face normals through the phi/theta grid and deduplicates.
     Each unique direction is paired with the rotation state (phi, theta, face_index)
@@ -188,9 +120,9 @@ def precompute_directions(rotations):
         Which rotation + face produces each direction — pass this to your
         DFN solver so it knows how to orient the domain.
     """
-    step = rotations[1] - rotations[0]
-    phi_angles   = list(range(0, 360, step))    # full azimuth
-    theta_angles = list(range(0, 180, step))    # full polar arc
+    step = rotations[1] - rotations[0] # assumes uniform step size in the rotation grid
+    phi_angles   = list(range(0, 360, step))    # full azimuth rotation around Z
+    theta_angles = list(range(0, 180, step))    # full polar arc rotation around X
 
     seen = set() # to track unique directions (rounded to avoid floating-point issues)
     unique_directions = []        # list of unique lab-frame unit vectors
@@ -200,8 +132,8 @@ def precompute_directions(rotations):
         for theta_deg in theta_angles:
             R = rotation_matrix('x', theta_deg) @ rotation_matrix('z', phi_deg)
             for face_idx, n_local in enumerate(FACE_NORMALS_LOCAL):
-                n_lab = R @ n_local
-                key = tuple(np.round(n_lab, 8))
+                n_lab = R @ n_local # rotate the local face normal to get the measurement direction in the lab frame
+                key = tuple(np.round(n_lab, 8)) # round to avoid floating-point issues when checking uniqueness
                 if key not in seen:
                     seen.add(key)
                     unique_directions.append(n_lab)
@@ -209,7 +141,8 @@ def precompute_directions(rotations):
 
     return np.array(unique_directions), rotation_states
 
-
+# This split directions function is used to create a training set (fit_directions) 
+# and a validation set (val_directions) from the precomputed unique directions. 
 def split_directions(directions, rotation_states, val_fraction=0.2, seed=42):
     """
     Split precomputed directions into fit / validation sets.
@@ -240,7 +173,7 @@ def split_directions(directions, rotation_states, val_fraction=0.2, seed=42):
 
 
 # ===========================================================================
-# PHASE 1 — precompute directions (instant, no DFN cost)
+# PHASE 1 — precompute directions ( no DFN cost)
 # ===========================================================================
 rotations = [0, 15, 30, 45, 60, 75]
 all_directions, all_rotation_states = precompute_directions(rotations)
@@ -273,19 +206,13 @@ print(f"\nExported 'unique_directions.csv' and 'rotation_states.csv'")
 # ===========================================================================
 # PHASE 2 — run DFN simulations (expensive — only for unique directions)
 # ===========================================================================
-fit_k   = np.array([run_dfn_simulation(*state)   for state in fit_states])
-val_k   = np.array([run_dfn_simulation(*state)   for state in val_states])
-fit_phi = np.array([run_porosity_simulation(*state) for state in fit_states])
-val_phi = np.array([run_porosity_simulation(*state) for state in val_states])
+fit_k = np.array([run_dfn_simulation(*state) for state in fit_states])
+val_k = np.array([run_dfn_simulation(*state) for state in val_states])
 
 # Build measurement points (for plotting)
 fit_points = fit_directions * fit_k[:, np.newaxis]
 val_points = val_directions * val_k[:, np.newaxis]
 all_points = np.vstack([fit_points, val_points])
-
-fit_phi_points = fit_directions * fit_phi[:, np.newaxis]
-val_phi_points = val_directions * val_phi[:, np.newaxis]
-all_phi_points = np.vstack([fit_phi_points, val_phi_points])
 
 
 # --- Fit the 3D conductivity tensor ---
@@ -299,18 +226,8 @@ K_tensor = np.array([
     [Kxz, Kyz, Kzz],
 ])
 
-# --- Fit the 3D porosity tensor (same structure as conductivity) ---
-phi_result, _, _, _ = np.linalg.lstsq(A_fit, fit_phi, rcond=None)
-Pxx, Pxy, Pxz, Pyy, Pyz, Pzz = phi_result
 
-Phi_tensor = np.array([
-    [Pxx, Pxy, Pxz],
-    [Pxy, Pyy, Pyz],
-    [Pxz, Pyz, Pzz],
-])
-
-
-# --- Fit quality (conductivity) ---
+# --- Fit quality ---
 fit_k_pred = A_fit @ result
 rmse_fit = np.sqrt(np.mean((fit_k - fit_k_pred) ** 2))
 
@@ -320,25 +237,12 @@ rmse_val = np.sqrt(np.mean((val_k - val_k_pred) ** 2))
 
 cond = np.linalg.cond(A_fit)
 
-# --- Fit quality (porosity) ---
-fit_phi_pred = A_fit @ phi_result
-rmse_phi_fit = np.sqrt(np.mean((fit_phi - fit_phi_pred) ** 2))
 
-val_phi_pred = A_val @ phi_result
-rmse_phi_val = np.sqrt(np.mean((val_phi - val_phi_pred) ** 2))
-
-
-# --- Principal values and orientation (conductivity) ---
+# --- Principal values and orientation ---
 eigvals, eigvecs = np.linalg.eigh(K_tensor)
 order = np.argsort(eigvals)[::-1]
 eigvals = eigvals[order]
 eigvecs = eigvecs[:, order]
-
-# --- Principal values and orientation (porosity) ---
-phi_eigvals, phi_eigvecs = np.linalg.eigh(Phi_tensor)
-phi_order = np.argsort(phi_eigvals)[::-1]
-phi_eigvals = phi_eigvals[phi_order]
-phi_eigvecs = phi_eigvecs[:, phi_order]
 
 
 # --- Console report ---
@@ -358,20 +262,6 @@ for i in range(3):
     print(f"    v{i+1} = [{eigvecs[0,i]:.4f}, {eigvecs[1,i]:.4f}, {eigvecs[2,i]:.4f}]")
 print(f"\n  RMSE on fit directions:        {rmse_fit:.4e}")
 print(f"  RMSE on held-out (validation): {rmse_val:.4e}  <- key quality indicator")
-
-print(f"\n{'='*60}")
-print(f"Fitted 3D porosity tensor:")
-print(f"  Phi = [[{Pxx:.4e}, {Pxy:.4e}, {Pxz:.4e}],")
-print(f"         [{Pxy:.4e}, {Pyy:.4e}, {Pyz:.4e}],")
-print(f"         [{Pxz:.4e}, {Pyz:.4e}, {Pzz:.4e}]]")
-print(f"\n  Principal values: phi1={phi_eigvals[0]:.4f}, phi2={phi_eigvals[1]:.4f}, phi3={phi_eigvals[2]:.4f}")
-print(f"  (True values:     phi1={PHI_PRINCIPAL[0]:.4f}, phi2={PHI_PRINCIPAL[1]:.4f}, phi3={PHI_PRINCIPAL[2]:.4f})")
-print(f"\n  Principal axes (porosity):")
-for i in range(3):
-    print(f"    u{i+1} = [{phi_eigvecs[0,i]:.4f}, {phi_eigvecs[1,i]:.4f}, {phi_eigvecs[2,i]:.4f}]")
-print(f"\n  RMSE porosity fit:        {rmse_phi_fit:.4e}")
-print(f"  RMSE porosity validation: {rmse_phi_val:.4e}")
-print(f"{'='*60}")
 
 
 # --- 3D scatter plot ---
@@ -558,47 +448,3 @@ plotter_ksurf.add_axes()
 plotter_ksurf.add_title("Directional Conductivity Surface k(n) — No Tensor Assumption")
 plotter_ksurf.camera_position = "iso"
 plotter_ksurf.show()
-
-
-# --- Porosity scatter plot ---
-fig_phi = plt.figure(figsize=(8, 8))
-ax_phi  = fig_phi.add_subplot(111, projection='3d')
-ax_phi.scatter(fit_phi_points[:, 0], fit_phi_points[:, 1], fit_phi_points[:, 2],
-               c='steelblue', marker='o', s=10, label='Fit measurements')
-ax_phi.scatter(val_phi_points[:, 0], val_phi_points[:, 1], val_phi_points[:, 2],
-               c='darkorange', marker='^', s=40, label='Validation measurements')
-ax_phi.set_xlabel('Porosity x')
-ax_phi.set_ylabel('Porosity y')
-ax_phi.set_zlabel('Porosity z')
-ax_phi.set_title('3D Directional Porosity — Rotation Grid Sampling')
-ax_phi.legend()
-plt.show()
-
-
-# --- Porosity ellipsoid (PyVista) ---
-phi_sphere     = pv.Sphere(radius=1.0, theta_resolution=50, phi_resolution=50)
-phi_sphere_pts = np.array(phi_sphere.points)
-phi_ell_pts    = (phi_eigvecs @ np.diag(phi_eigvals) @ phi_sphere_pts.T).T
-phi_ellipsoid  = phi_sphere.copy()
-phi_ellipsoid.points = phi_ell_pts
-
-plotter_phi = pv.Plotter()
-plotter_phi.add_mesh(phi_ellipsoid, color='lightgreen', opacity=0.4, label='Fitted Porosity Ellipsoid')
-plotter_phi.add_points(fit_phi_points,  color='steelblue',  point_size=8,  label='Fit measurements')
-plotter_phi.add_points(val_phi_points,  color='darkorange', point_size=12, label='Validation measurements')
-
-phi_labels = ['phi1 (max)', 'phi2 (mid)', 'phi3 (min)']
-for i, color in enumerate(['red', 'green', 'blue']):
-    axis_vec = phi_eigvecs[:, i] * phi_eigvals[i]
-    plotter_phi.add_arrows(np.zeros((1, 3)), axis_vec.reshape(1, 3), color=color, mag=1)
-    plotter_phi.add_point_labels(
-        axis_vec.reshape(1, 3),
-        [f"{phi_labels[i]} = {phi_eigvals[i]:.4f}"],
-        font_size=12,
-        text_color=color,
-        bold=True,
-    )
-
-plotter_phi.add_axes()
-plotter_phi.add_title('Directional Porosity — Fitted Ellipsoid')
-plotter_phi.show()

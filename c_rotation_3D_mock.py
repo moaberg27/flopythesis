@@ -125,9 +125,9 @@ def mock_dfn(rotation_deg, noise=0.10):
     )
 
 # test with isotropic tensor (should give same K in all directions)
-# def mock_dfn(rotation_deg):
-#     k_iso = 1.5
-#     return (k_iso, k_iso, k_iso, k_iso, k_iso, k_iso)
+#def mock_dfn(rotation_deg):
+     #k_iso = 1.5
+     #return (k_iso, k_iso, k_iso, k_iso, k_iso, k_iso)
 
 
 # Run mock DFN for all rotations and store results
@@ -662,11 +662,6 @@ def plot_pyvista_shell_with_point_ids(points, mesh, point_ids, output_path):
         plotter.add_axes()
         plotter.add_title(
             f"Mock DFN Dense Face Shell With Point IDs 1-{len(point_ids)}")
-        plotter.add_text(
-            "Högerklicka på en punkt för att skriva ut point_id",
-            position="upper_left",
-            font_size=10,
-        )
         plotter.camera_position = "iso"
         try:
             plotter.enable_point_picking(

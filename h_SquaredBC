@@ -89,7 +89,7 @@ dis = fp.mf6.ModflowGwfdis(gwf,
 # Node property flow package
 npf = fp.mf6.ModflowGwfnpf(gwf, 
                            save_specific_discharge=True,
-                           icelltype=1,
+                           icelltype=0,
                            k=k_x,
                            k22=k_y,
                            k33=k_z,
@@ -174,7 +174,7 @@ print(f"max head: {np.ma.max(active_heads)}, min head: {np.ma.min(active_heads)}
 pmv = fp.plot.PlotMapView(model=gwf)
 qm = pmv.plot_array(head_lay1_plot)
 plt.colorbar(qm, shrink=0.5, label='Head (m)')
-cs = pmv.contour_array(head_lay1_plot, levels=range(100, 50, 5), linewidths=1, colors='k') 
+cs = pmv.contour_array(head_lay1_plot, levels=range(150, 50, 5), linewidths=1, colors='k') 
 plt.clabel(cs, fmt='%1.0f')
 plt.title("Head Contours for Layer 1")
 
@@ -396,8 +396,8 @@ ending_radii = np.array(ending_radii)
 
 # Print summary
 print(f"\nNumber of particles : {len(arrival_times)}") 
-print(f"Arrival times [days]: min={arrival_times.min():.1f}, "
-      f"max={arrival_times.max():.1f}, mean={arrival_times.mean():.1f}")
+print(f"Arrival times [years]: min={arrival_times.min()/365.25:.1f}, "
+      f"max={arrival_times.max()/365.25:.1f}, mean={arrival_times.mean()/365.25:.1f}")
 print(f"Trace lengths [m]  : min={trace_lengths.min():.1f}, "
       f"max={trace_lengths.max():.1f}, mean={trace_lengths.mean():.1f}")
 print(f"Mean velocities [m/d]: min={np.nanmin(particle_velocities):.4f}, "

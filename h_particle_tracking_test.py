@@ -8,10 +8,58 @@ from tempfile import TemporaryDirectory
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 proj_root = Path.cwd().parent.parent
 script_dir = Path(__file__).resolve().parent
 
+# ---------------------------------------------------------------------------
+# Load the fitted 3D conductivity tensor from the rotation analysis
+# ---------------------------------------------------------------------------
+TENSOR_CSV = script_dir / "csv_files" / "tensor_sim_one.csv"
+
+
+def tensor_to_npf_params(csv_path):
+    """Read fitted tensor CSV and return MODFLOW 6 NPF parameters.
+
+    MODFLOW 6 angle convention (XT3D):
+      angle1 = rotation about z   (azimuth of k1 in the xy-plane)
+      angle2 = rotation about x'  (dip of k1 below the xy-plane)
+      angle3 = rotation about y'' (roll / bank)
+    """
+    df = pd.read_csv(csv_path)
+    row = df.iloc[0]
+
+    k1, k2, k3 = float(row["k1"]), float(row["k2"]), float(row["k3"])
+    v1 = np.array([float(row["v1_x"]), float(row["v1_y"]), float(row["v1_z"])])
+    v2 = np.array([float(row["v2_x"]), float(row["v2_y"]), float(row["v2_z"])])
+
+    # angle1: azimuth of k1 projected onto the xy-plane
+    angle1 = np.degrees(np.arctan2(v1[1], v1[0]))
+
+    # angle2: dip of k1 below horizontal
+    angle2 = np.degrees(np.arcsin(np.clip(-v1[2], -1.0, 1.0)))
+
+    # angle3: rotation of k2/k3 around k1 after applying angle1 & angle2
+    cos1, sin1 = np.cos(np.radians(angle1)), np.sin(np.radians(angle1))
+    cos2, sin2 = np.cos(np.radians(angle2)), np.sin(np.radians(angle2))
+    y_prime = np.array([-sin1, cos1, 0.0])
+    z_prime = np.array([-cos1 * sin2, -sin1 * sin2, cos2])
+    angle3 = np.degrees(np.arctan2(np.dot(v2, z_prime), np.dot(v2, y_prime)))
+
+    return {"k": k1, "k22": k2, "k33": k3,
+            "angle1": angle1, "angle2": angle2, "angle3": angle3}
+
+# Manually specified NPF parameters (if tensor CSV is not available)
+npf_params = {"k": 2.0, "k22": 2.0, "k33": 2.0,
+                  "angle1": 0.0, "angle2": 0.0, "angle3": 0.0}
+
+# if TENSOR_CSV.exists():
+#     npf_params = tensor_to_npf_params(TENSOR_CSV)
+# else:
+#     print(f"WARNING: {TENSOR_CSV} not found — falling back to isotropic K=2.0")
+#     npf_params = {"k": 2.0, "k22": 2.0, "k33": 2.0,
+#                   "angle1": 0.0, "angle2": 0.0, "angle3": 0.0}
 
 # Use executables from the script directory
 flopy_root = Path(__file__).resolve().parent
@@ -32,11 +80,6 @@ try:
 except:
     sys.path.append(proj_root)
     import flopy
-
-print(sys.version)
-print("numpy version: {}".format(np.__version__))
-print("matplotlib version: {}".format(mpl.__version__))
-print("flopy version: {}".format(flopy.__version__))
 
 # temporary directory
 temp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
@@ -63,8 +106,6 @@ dis5 = flopy.modflow.ModflowDis(
     top=top,
     botm=botm,
 )
-print(f"nlay: {nlay}, nrow: {nrow}, ncol: {ncol}")
-print(f"delr: {delr}, delc: {delc}")
 
 # Create the Gridgen object
 from flopy.utils.gridgen import Gridgen
@@ -217,14 +258,18 @@ disv = flopy.mf6.ModflowGwfdisv(
 # initial conditions
 ic = flopy.mf6.ModflowGwfic(gwf, pname="ic", strt=100.0)
 
-# node property flow
+# node property flow — full 3D anisotropy via XT3D
 npf = flopy.mf6.ModflowGwfnpf(
     gwf,
     xt3doptions=[("xt3d")],
-    icelltype=[1], # layer 1 is convertible
-    k=[2.0], # horizontal conductivity for layers 1
-    k22=[2.0], # horizontal conductivity for layers 1
-    k33=[2.0], # vertical conductivity for layers 1
+    icelltype=[0],  # confined: prevents cells going dry at the well
+    k=[npf_params["k"]],
+    k22=[npf_params["k22"]],
+    k33=[npf_params["k33"]],
+    angle1=[npf_params["angle1"]],
+    angle2=[npf_params["angle2"]],
+    angle3=[npf_params["angle3"]],
+    save_specific_discharge=True,
 )
 
 # well – placed at the model centre, inside the most-refined zone
@@ -329,19 +374,21 @@ hdobj = flopy.utils.HeadFile(fname)
 head = hdobj.get_data()
 head.shape
 
+# Mask HDRY values (1e+30) that MODFLOW writes for dry/inactive cells
+head_plot = np.ma.masked_where(head > 1e+20, head)
+
 # Plot the head distribution in layer 3
 ilay = 0
-cint = 0.25
 fig = plt.figure(figsize=(8, 8), constrained_layout=True)
 ax = fig.add_subplot(1, 1, 1, aspect="equal")
 mm = flopy.plot.PlotMapView(modelgrid=mg, ax=ax, layer=ilay)
 ax.set_xlim(0, Lx)
 ax.set_ylim(0, Ly)
-pc = mm.plot_array(head[:, 0, :], cmap="jet", edgecolor="black")
-hmin = head[ilay, 0, :].min()
-hmax = head[ilay, 0, :].max()
-levels = np.arange(np.floor(hmin), np.ceil(hmax) + cint, cint)
-cs = mm.contour_array(head[:, 0, :], colors="white", levels=levels)
+pc = mm.plot_array(head_plot[:, 0, :], cmap="jet", edgecolor="black")
+hmin = float(head_plot[ilay, 0, :].min())
+hmax = float(head_plot[ilay, 0, :].max())
+levels = np.linspace(hmin, hmax, 20)
+cs = mm.contour_array(head_plot[:, 0, :], colors="white", levels=levels)
 plt.clabel(cs, fmt="%.1f", colors="white", fontsize=11)
 cb = plt.colorbar(pc, shrink=0.5)
 t = ax.set_title(
@@ -422,16 +469,18 @@ mp_nameb = model_name + "b_mp"
 
 #Create particles for the pathline and timeseries analysis
 
-# 30-particle ring around the well cell
+# 30-particle ring in neighboring cells around the well cell
+# (particles cannot be placed inside the strong-sink well cell on a DISV grid)
 well_cell_icpl = int(welcells["nodenumber"][0])
 cx = float(mg.xcellcenters[well_cell_icpl])
 cy = float(mg.ycellcenters[well_cell_icpl])
 xc_cells = np.array(mg.xcellcenters, dtype=float)
 yc_cells = np.array(mg.ycellcenters, dtype=float)
-active_circle = np.ones(ncpl, dtype=bool)  # all cells considered active
+
+nodew = well_cell_icpl  # global node number for the well cell (1 layer)
 
 N_particles = 30
-r_ring = 20.0  # radius of release ring (m), inside the refined zone
+r_ring = 20.0  # physical radius of the release ring [m], inside the refined zone
 theta = np.linspace(0, 2 * np.pi, N_particles, endpoint=False)
 ring_x = cx + r_ring * np.cos(theta)
 ring_y = cy + r_ring * np.sin(theta)
@@ -439,15 +488,12 @@ ring_y = cy + r_ring * np.sin(theta)
 plocs = []
 for px, py in zip(ring_x, ring_y):
     d = (xc_cells - px) ** 2 + (yc_cells - py) ** 2
-    d[~active_circle] = np.inf
     d[well_cell_icpl] = np.inf  # exclude the well cell itself
     plocs.append(int(np.argmin(d)))
 
 localx = [0.5] * N_particles
 localy = [0.5] * N_particles
 localz = [0.5] * N_particles
-
-nodew = well_cell_icpl  # global node number for the well cell (1 layer)
 
 # create particle data
 pa = flopy.modpath.ParticleData(
@@ -504,8 +550,8 @@ flopy.modpath.Modpath7Sim(
     weaksinkoption="pass_through",
     weaksourceoption="pass_through",
     referencetime=0.0,
-    stoptimeoption="extend", # stop time will be extended as needed to capture all particle endpoints
-    timepointdata=[500, 1000.0], # time points for pathline output (days)
+    stoptimeoption="extend",
+    timepointdata=[500, 1000.0],
     particlegroups=pga,
 )
 
@@ -539,26 +585,6 @@ _fix_fortran_floats(fpth)
 e = flopy.utils.EndpointFile(fpth)
 e0 = e.get_alldata()
 
-# Diagnose particle termination statuses
-# MODPATH 7 status codes: 2=boundary face, 5=strong source/sink, 9=unknown (stop time reached)
-status_labels = {
-    2: "boundary face",
-    5: "strong source/sink (well)",
-    9: "unknown / stop time reached",
-}
-print("\n--- Particle endpoint diagnostics ---")
-for code, label in status_labels.items():
-    mask = e0["status"] == code
-    ids = e0["particleid"][mask]
-    if len(ids):
-        print(f"Status {code} ({label}): {len(ids)} particles -> IDs: {ids.tolist()}")
-        print(f"  Final positions x: {e0['x'][mask].round(1).tolist()}")
-        print(f"  Final positions y: {e0['y'][mask].round(1).tolist()}")
-other = ~np.isin(e0["status"], list(status_labels.keys()))
-if np.any(other):
-    print(f"Other statuses: codes={e0['status'][other].tolist()}, IDs={e0['particleid'][other].tolist()}")
-print("-------------------------------------\n")
-
 #Plot the endpoint data.
 fig = plt.figure(figsize=(8, 8), constrained_layout=True)
 ax = fig.add_subplot(1, 1, 1, aspect="equal")
@@ -573,17 +599,6 @@ cmap = mpl.colors.ListedColormap(
 )
 v = mm.plot_array(ibd, cmap=cmap, edgecolor="gray")
 mm.plot_endpoint(e0, direction="ending", colorbar=True, shrink=0.5)
-
-for rec in e0:
-    ax.annotate(
-        str(rec["particleid"]),
-        xy=(rec["x"], rec["y"]),
-        fontsize=7,
-        ha="center",
-        va="bottom",
-        color="black",
-    )
-
 plt.show()
 
 
@@ -594,28 +609,25 @@ fname_pth = model_ws / f"{mp_namea}.mppth"
 _fix_fortran_floats(fname_pth)
 p_btc = flopy.utils.PathlineFile(fname_pth)
 
-b = top_scalar = float(top[0]) if hasattr(top, '__len__') else float(top)  # aquifer thickness (top is array from gridprops)
-b = float(top[0]) - float(botm[-1, 0])   # thickness at any cell (uniform)
+b = float(top[0]) - float(botm[-1, 0])   # aquifer thickness (uniform)
 porosity_val = 0.3  # must match Modpath7Bas porosity
 
-arrival_times   = []   # total travel time per particle [days]
-trace_lengths   = []   # total path length [m]
-particle_velocities = []  # mean pore velocity [m/d]
-ending_radii    = []   # radial distance of last waypoint from well [m]
+arrival_times   = []
+trace_lengths   = []
+particle_velocities = []
+ending_radii    = []
+valid_particle_ids = []
 
 for pid in range(p_btc.get_maxid() + 1):
     pi = p_btc.get_data(partid=pid)
     if len(pi) < 2:
         continue
-    xp = pi['x']
-    yp = pi['y']
-    dx = np.diff(xp)
-    dy = np.diff(yp)
-    seg_lengths  = np.sqrt(dx**2 + dy**2)
+    valid_particle_ids.append(pid)
+    xp, yp = pi['x'], pi['y']
+    seg_lengths  = np.sqrt(np.diff(xp)**2 + np.diff(yp)**2)
     total_length = float(np.sum(seg_lengths))
-    total_time   = float(pi['time'][-1])   # [days]
-    r_end = float(np.sqrt((xp[-1] - cx)**2 + (yp[-1] - cy)**2))
-    ending_radii.append(r_end)
+    total_time   = float(pi['time'][-1])
+    ending_radii.append(float(np.sqrt((xp[-1] - cx)**2 + (yp[-1] - cy)**2)))
     arrival_times.append(total_time)
     trace_lengths.append(total_length)
     particle_velocities.append(total_length / total_time if total_time > 0 else np.nan)
@@ -624,14 +636,6 @@ arrival_times       = np.array(arrival_times)
 trace_lengths       = np.array(trace_lengths)
 particle_velocities = np.array(particle_velocities)
 ending_radii        = np.array(ending_radii)
-
-print(f"\nNumber of particles : {len(arrival_times)}")
-print(f"Arrival times [years]: min={arrival_times.min()/365.25:.1f}, "
-      f"max={arrival_times.max()/365.25:.1f}, mean={arrival_times.mean()/365.25:.1f}")
-print(f"Trace lengths [m]   : min={trace_lengths.min():.1f}, "
-      f"max={trace_lengths.max():.1f}, mean={trace_lengths.mean():.1f}")
-print(f"Mean velocities [m/d]: min={np.nanmin(particle_velocities):.4f}, "
-      f"max={np.nanmax(particle_velocities):.4f}")
 
 arrival_years = arrival_times / 365.25
 
@@ -658,11 +662,6 @@ t_analytical_years = t_analytical / 365.25
 sorted_analytical   = np.sort(t_analytical_years)
 cum_frac_analytical = np.arange(1, len(sorted_analytical) + 1) / len(sorted_analytical)
 
-print(f"\nAnalytical travel times [years]: "
-      f"min={t_analytical_years.min():.2f}, "
-      f"max={t_analytical_years.max():.2f}, "
-      f"mean={t_analytical_years.mean():.2f}")
-
 fig, ax = plt.subplots(figsize=(7, 4))
 ax.plot(sorted_times,       cumulative_fraction,   'k-',  lw=2, label='Numerical (MODPATH)')
 ax.plot(sorted_analytical,  cum_frac_analytical,   'r--', lw=2, label='Analytical (radial)')
@@ -678,8 +677,6 @@ plt.show()
 
 # Relative error per particle
 rel_error = np.abs(arrival_times - t_analytical) / t_analytical * 100
-print(f"Relative error [%]: min={rel_error.min():.2f}, "
-      f"max={rel_error.max():.2f}, mean={rel_error.mean():.2f}")
 
 # 3 Histogram of arrival times
 fig, ax = plt.subplots(figsize=(7, 4))
@@ -691,13 +688,119 @@ ax.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# 4 Trace lengths and mean velocities
+# 4 Arrival times by particle ID
+fig, ax = plt.subplots(figsize=(10, 6))
+bars = ax.bar(valid_particle_ids, arrival_years, color='mediumseagreen', alpha=0.7, edgecolor='black', linewidth=0.5)
+ax.set_xlabel("Particle ID")
+ax.set_ylabel("Arrival time (years)")
+ax.set_title(f"Particle Arrival Times at the Well ({len(valid_particle_ids)}/{N_particles} particles)")
+ax.grid(True, alpha=0.3)
+
+# Add value labels on bars
+for pid, time_years in zip(valid_particle_ids, arrival_years):
+    ax.text(pid, time_years + max(arrival_years)*0.01, f'{time_years:.1f}', 
+            ha='center', va='bottom', fontsize=8, rotation=0)
+
+# Add summary statistics as text box
+stats_text = (f'Valid particles: {len(valid_particle_ids)}/{N_particles}\n'
+              f'Min: {arrival_years.min():.1f} years\n'
+              f'Max: {arrival_years.max():.1f} years\n'
+              f'Mean: {arrival_years.mean():.1f} years\n'
+              f'Std: {arrival_years.std():.1f} years')
+ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10, 
+        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+plt.tight_layout()
+plt.show()
+
+# =============================================================================
+# ALTERNATIVE PLOT: ALL 30 PARTICLES (INCLUDING INCOMPLETE JOURNEYS)
+# =============================================================================
+
+# Get travel times for ALL particles (including incomplete ones)
+all_times = []
+all_statuses = []
+particle_ids_all = []
+for pid in range(N_particles):
+    pi = p_btc.get_data(partid=pid)
+    if len(pi) > 0:
+        final_time = float(pi['time'][-1])
+        all_times.append(final_time)
+        particle_ids_all.append(pid)
+        
+        # Determine status from endpoint data
+        endpoint_mask = e0["particleid"] == pid
+        if np.any(endpoint_mask):
+            status = e0["status"][endpoint_mask][0]
+            all_statuses.append(status)
+        else:
+            all_statuses.append(-1)  # Unknown status
+
+all_times_years = np.array(all_times) / 365.25
+all_statuses = np.array(all_statuses)
+
+# Create color map for different statuses
+colors = []
+labels = []
+for status in all_statuses:
+    if status == 5:
+        colors.append('green')
+        labels.append('Completed (Well)')
+    elif status == 9:
+        colors.append('orange')  
+        labels.append('Incomplete (Time limit)')
+    else:
+        colors.append('red')
+        labels.append('Unknown')
+
+# Plot all particles with status-based coloring
+fig, ax = plt.subplots(figsize=(12, 8))
+bars = ax.bar(particle_ids_all, all_times_years, color=colors, alpha=0.7, edgecolor='black', linewidth=0.5)
+
+ax.set_xlabel("Particle ID")
+ax.set_ylabel("Travel time (years)")
+ax.set_title(f"All Particle Travel Times (Complete and Incomplete Journeys)")
+ax.grid(True, alpha=0.3)
+
+# Add legend
+from matplotlib.patches import Patch
+legend_elements = [Patch(facecolor='green', alpha=0.7, label=f'Completed at well ({np.sum(all_statuses == 5)} particles)'),
+                   Patch(facecolor='orange', alpha=0.7, label=f'Hit time limit ({np.sum(all_statuses == 9)} particles)')]
+if np.any(all_statuses == -1):
+    legend_elements.append(Patch(facecolor='red', alpha=0.7, label=f'Unknown status ({np.sum(all_statuses == -1)} particles)'))
+
+ax.legend(handles=legend_elements, loc='upper left')
+
+# Add horizontal line at simulation time limit
+ax.axhline(y=500000/365.25, color='red', linestyle='--', alpha=0.7, label='Simulation time limit')
+
+# Add statistics box
+completed = np.sum(all_statuses == 5)
+incomplete = np.sum(all_statuses == 9)
+completed_times = all_times_years[all_statuses == 5]
+if len(completed_times) > 0:
+    stats_text = (f'Total particles: {len(particle_ids_all)}\n'
+                  f'Completed journeys: {completed}\n'
+                  f'Incomplete journeys: {incomplete}\n'
+                  f'Mean completion time: {completed_times.mean():.0f} years\n'
+                  f'Simulation limit: {500000/365.25:.0f} years')
+else:
+    stats_text = f'Total particles: {len(particle_ids_all)}\nNo completed journeys'
+
+ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, fontsize=10, 
+        verticalalignment='top', horizontalalignment='right',
+        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+plt.tight_layout()
+plt.show()
+
+# 5 Trace lengths and mean velocities
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-axes[0].bar(range(len(trace_lengths)),       trace_lengths,       color='steelblue')
+axes[0].bar(valid_particle_ids, trace_lengths, color='steelblue')
 axes[0].set_xlabel("Particle ID")
 axes[0].set_ylabel("Trace length (m)")
 axes[0].set_title("Numerical Pathline Lengths (MODPATH)")
-axes[1].bar(range(len(particle_velocities)), particle_velocities, color='coral')
+axes[1].bar(valid_particle_ids, particle_velocities, color='coral')
 axes[1].set_xlabel("Particle ID")
 axes[1].set_ylabel("Mean pore velocity (m/d)")
 axes[1].set_title("Numerical Mean Pore Velocities (MODPATH)")
@@ -706,8 +809,6 @@ plt.show()
 
 
 # 3D PYVISTA VISUALIZATION OF MODPATH PATHLINES
-print("Loading pathlines for 3D visualization...")
-
 from flopy.utils import PathlineFile
 from flopy.export.vtk import Vtk
 import pyvista as pv
@@ -728,10 +829,6 @@ vtk.add_pathline_points(pl)
 
 # Convert to PyVista
 grid, pathlines = vtk.to_pyvista()
-
-print("PyVista meshes created:")
-print(" - Grid cells:", grid.n_cells)
-print(" - Pathline points:", pathlines.n_points)
 
 # Derive a 3D point for the pumping well from the intersected DISV cell center.
 wel_icpl = int(welcells["nodenumber"][0])
@@ -764,26 +861,6 @@ p.add_mesh(
     render_points_as_spheres=True,
 )
 
-# Label each particle at its first recorded point (release location)
-times_arr = pathlines["time"]
-pids_arr = pathlines["particleid"]
-xyz_arr = pathlines.points
-seen_pids = set()
-for i in range(len(times_arr)):
-    pid = int(pids_arr[i])
-    if pid not in seen_pids:
-        seen_pids.add(pid)
-        p.add_point_labels(
-            [xyz_arr[i]],
-            [str(pid)],
-            font_size=10,
-            text_color="black",
-            point_color="orange",
-            point_size=8,
-            render_points_as_spheres=True,
-            always_visible=True,
-        )
-
 p.add_axes()
 p.camera.zoom(1.3)
 p.show()
@@ -813,8 +890,6 @@ for i in range(len(times)):
 release_locs = np.array(release_locs)
 tracks = {pid: np.array(track, dtype=object) for pid, track in tracks.items()}
 max_track_len = max(len(track) for track in tracks.values())
-
-print("Longest track length:", max_track_len)
 
 # Explicitly release resources before cleaning temporary workspace on Windows.
 if hasattr(hdobj, "close"):
