@@ -6,6 +6,7 @@ This is an example of a model.
 
 import datetime
 import os
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -107,6 +108,7 @@ if __name__ == "__main__":
                                     "y", "z"], f"step3_yz_x{tilt_x_deg}_xy_z{z_deg}"))
 
     # Store points for 3D plotting
+    dfn_plotters = {}  # Save all PyVista plots here to view later
     plot_points = []
     plot_dirs = []
     plot_colors = []
@@ -207,59 +209,58 @@ if __name__ == "__main__":
             start2 = datetime.datetime.now()
 
             if solve_failed:
-                sum_flows = 0.0
-                k_axis = 0.0
+                sum_flows = np.nan
+                k_axis = np.nan
             else:
                 sum_flows = regbox.get_total_flow()/2
                 k_axis = sum_flows * L / (A * (head1 - head0))
 
             # Add to plotting structures like in c_rotation
             # We assume flow enters along the local axis positive and negative directions
-            if axis_name == "x":
-                n_pos = r_matrix @ np.array([1, 0, 0])
-                n_neg = r_matrix @ np.array([-1, 0, 0])
-                plot_points.append(k_axis * n_pos)
-                plot_points.append(k_axis * n_neg)
-                plot_dirs.extend([n_pos, n_neg])
-                plot_colors.extend([FACE_COLORS["+x"], FACE_COLORS["-x"]])
-                plot_labels.extend([rot_label, rot_label])
-                plot_face_ids.extend(["+x", "-x"])
-            elif axis_name == "y":
-                n_pos = r_matrix @ np.array([0, 1, 0])
-                n_neg = r_matrix @ np.array([0, -1, 0])
-                plot_points.append(k_axis * n_pos)
-                plot_points.append(k_axis * n_neg)
-                plot_dirs.extend([n_pos, n_neg])
-                plot_colors.extend([FACE_COLORS["+y"], FACE_COLORS["-y"]])
-                plot_labels.extend([rot_label, rot_label])
-                plot_face_ids.extend(["+y", "-y"])
-            elif axis_name == "z":
-                n_pos = r_matrix @ np.array([0, 0, 1])
-                n_neg = r_matrix @ np.array([0, 0, -1])
-                plot_points.append(k_axis * n_pos)
-                plot_points.append(k_axis * n_neg)
-                plot_dirs.extend([n_pos, n_neg])
-                plot_colors.extend([FACE_COLORS["+z"], FACE_COLORS["-z"]])
-                plot_labels.extend([rot_label, rot_label])
-                plot_face_ids.extend(["+z", "-z"])
+            if not np.isnan(k_axis):
+                if axis_name == "x":
+                    n_pos = r_matrix @ np.array([1, 0, 0])
+                    n_neg = r_matrix @ np.array([-1, 0, 0])
+                    plot_points.append(k_axis * n_pos)
+                    plot_points.append(k_axis * n_neg)
+                    plot_dirs.extend([n_pos, n_neg])
+                    plot_colors.extend([FACE_COLORS["+x"], FACE_COLORS["-x"]])
+                    plot_labels.extend([rot_label, rot_label])
+                    plot_face_ids.extend(["+x", "-x"])
+                elif axis_name == "y":
+                    n_pos = r_matrix @ np.array([0, 1, 0])
+                    n_neg = r_matrix @ np.array([0, -1, 0])
+                    plot_points.append(k_axis * n_pos)
+                    plot_points.append(k_axis * n_neg)
+                    plot_dirs.extend([n_pos, n_neg])
+                    plot_colors.extend([FACE_COLORS["+y"], FACE_COLORS["-y"]])
+                    plot_labels.extend([rot_label, rot_label])
+                    plot_face_ids.extend(["+y", "-y"])
+                elif axis_name == "z":
+                    n_pos = r_matrix @ np.array([0, 0, 1])
+                    n_neg = r_matrix @ np.array([0, 0, -1])
+                    plot_points.append(k_axis * n_pos)
+                    plot_points.append(k_axis * n_neg)
+                    plot_dirs.extend([n_pos, n_neg])
+                    plot_colors.extend([FACE_COLORS["+z"], FACE_COLORS["-z"]])
+                    plot_labels.extend([rot_label, rot_label])
+                    plot_face_ids.extend(["+z", "-z"])
 
             print(f"[{axis_name}] Total flow: {sum_flows:.2e} m^3/s")
             print(f"[{axis_name}] k: {k_axis:.2e} m/s")
 
-            if axis_name == "x" and not solve_failed:
-                print("\n---- PLOTTING DFN (x-direction solve) ----")
+            if str(idx+1) not in dfn_plotters and not solve_failed:
+                print(
+                    f"\n---- SAVING DFN PLOT FOR ROTATION {idx+1} ({axis_name}-direction solve) ----")
                 p1 = dfn.initiate_plotter(
                     title=True, off_screen=False, scale=1, axis=True)
 
                 dfn.plot_fractures_head(
                     p1, 40, 10, opacity=1, contour=True
-                )  # , limits=[200, 400], debug=False)
+                )
                 regbox.plot(p1)
-                if block_on_dfn_plots:
-                    p1.show()
-                else:
-                    # Render once and continue without waiting for manual close.
-                    p1.show(interactive=False, auto_close=True)
+
+                dfn_plotters[str(idx+1)] = p1
 
     # 3D plot where each point is a directional vector tip in local coordinates.
     if plot_points:
@@ -301,7 +302,38 @@ if __name__ == "__main__":
 
         K_fit = fit_tensor_least_squares(dirs, k_meas)
 
-        # Re-use overlap y-points
+        # ====== Export Rotations CSVs ======
+        CSV_DIR = Path(r"C:\Users\SEMB94861\Flopy\flopythesis\csv_files")
+        POINTS_CSV_PATH = CSV_DIR / "ny_rotation_points.csv"
+        TENSOR_CSV_PATH = CSV_DIR / "ny_rotation_tensor_for_continuum.csv"
+
+        CSV_DIR.mkdir(parents=True, exist_ok=True)
+
+        header_points = "point_id,rotation_label,face,kx,ky,kz,k_value,dir_x,dir_y,dir_z\n"
+        with open(POINTS_CSV_PATH, "w", encoding="utf-8", newline="") as f:
+            f.write(header_points)
+            for i, (p, d, r_label, face) in enumerate(zip(points, dirs, rot_ids, face_ids), start=1):
+                k_val = float(np.linalg.norm(p))
+                f.write(
+                    f"{i},{r_label},{face},"
+                    f"{p[0]:.10g},{p[1]:.10g},{p[2]:.10g},"
+                    f"{k_val:.10g},{d[0]:.10g},{d[1]:.10g},{d[2]:.10g}\n"
+                )
+
+        header_tensor = "angle_deg,k_xx,k_xy,k_xz,k_yx,k_yy,k_yz,k_zx,k_zy,k_zz\n"
+        with open(TENSOR_CSV_PATH, "w", encoding="utf-8", newline="") as f:
+            f.write(header_tensor)
+            f.write(
+                "0.0,"
+                f"{K_fit[0, 0]:.10g},{K_fit[0, 1]:.10g},{K_fit[0, 2]:.10g},"
+                f"{K_fit[1, 0]:.10g},{K_fit[1, 1]:.10g},{K_fit[1, 2]:.10g},"
+                f"{K_fit[2, 0]:.10g},{K_fit[2, 1]:.10g},{K_fit[2, 2]:.10g}\n"
+            )
+        print(f"Saved point CSV: {POINTS_CSV_PATH}")
+        print(f"Saved tensor CSV for continuum model: {TENSOR_CSV_PATH}")
+
+        # ====== Plot 1: Scatter Points ======
+        # Re-use overlap y-points visualization
         plot_mask = np.ones(len(points), dtype=bool)
         seen_y_keys = set()
         for i, (p, face, rot_label) in enumerate(zip(points, face_ids, rot_ids)):
@@ -316,7 +348,48 @@ if __name__ == "__main__":
 
         points_plot = points[plot_mask]
         colors_plot = colors[plot_mask]
+        face_ids_plot = face_ids[plot_mask]
+        rot_ids_plot = rot_ids[plot_mask]
 
+        # Display offset to separate dots visually
+        points_plot_display = points_plot.copy()
+        face_axes_map = {
+            "+x": np.array([1, 0, 0]), "-x": np.array([-1, 0, 0]),
+            "+y": np.array([0, 1, 0]), "-y": np.array([0, -1, 0]),
+            "+z": np.array([0, 0, 1]), "-z": np.array([0, 0, -1]),
+        }
+        for i, face in enumerate(face_ids_plot):
+            points_plot_display[i] = points_plot_display[i] + \
+                0.03 * face_axes_map[face]
+
+        fig_scatter = plt.figure(figsize=(8, 7))
+        ax_scatter = fig_scatter.add_subplot(111, projection="3d")
+
+        ax_scatter.scatter(
+            points_plot_display[:, 0], points_plot_display[:,
+                                                           1], points_plot_display[:, 2],
+            c=colors_plot, s=60, alpha=0.95, edgecolors="black", linewidths=0.35,
+            label="K magnitude"
+        )
+
+        # Labels
+        for p, r_label, face in zip(points_plot_display, rot_ids_plot, face_ids_plot):
+            ax_scatter.text(p[0] + 0.03, p[1] + 0.03, p[2] +
+                            0.03, f"{r_label}:{face}", fontsize=7, alpha=0.85)
+
+        lim_sc = np.max(np.abs(points)) * 1.2
+        ax_scatter.set_xlim(-lim_sc, lim_sc)
+        ax_scatter.set_ylim(-lim_sc, lim_sc)
+        ax_scatter.set_zlim(-lim_sc, lim_sc)
+        ax_scatter.set_box_aspect([1, 1, 1])
+        ax_scatter.set_xlabel("K_x")
+        ax_scatter.set_ylabel("K_y")
+        ax_scatter.set_zlabel("K_z")
+        ax_scatter.set_title("Directional conductivity from flow experiments")
+        plt.tight_layout()
+        plt.show(block=False)
+
+        # ====== Plot 2: Ellipsoid Fit ======
         fig_fit = plt.figure(figsize=(8, 7))
         ax_fit = fig_fit.add_subplot(111, projection="3d")
 
@@ -348,7 +421,34 @@ if __name__ == "__main__":
         ax_fit.set_ylabel("K_y")
         ax_fit.set_zlabel("K_z")
         ax_fit.set_title("Least-squares fitted conductivity ellipsoid")
-        plt.tight_layout()
+        fig_fit.tight_layout()
+
+        # Add a text box to the figure for picking a PyVista DFN plot to view
+        fig_fit.subplots_adjust(bottom=0.2)
+        ax_text = fig_fit.add_axes([0.35, 0.05, 0.3, 0.075])
+
+        from matplotlib.widgets import TextBox
+        plot_selector = TextBox(
+            ax_text, "Visa 3D DFN plot nr (1-66): ", initial="")
+
+        def submit_plot(text):
+            text = text.strip()
+            if not text:
+                return
+            if text in dfn_plotters:
+                print(
+                    f"Visar 3D DFN plot för rotation {text}... (Stäng fönstret för att fortsätta med Matplotlib)")
+                try:
+                    dfn_plotters[text].show()
+                except Exception as e:
+                    print(f"Fel vid visning (Kanske redan stängd?): {e}")
+                plot_selector.set_val("")  # reset text box
+            else:
+                print(
+                    f"Ingen plot hittades för '{text}'. (Värden t.ex. 1 till 66, eller failed solves)")
+                plot_selector.set_val("")
+
+        plot_selector.on_submit(submit_plot)
 
         if block_on_final_k_plot:
             plt.show()
@@ -362,6 +462,20 @@ if __name__ == "__main__":
     print(f"\t-generating: \t{start1 - start0}")
     print(f"\t-solving: \t\t\t{start2 - start1}")
     print(f"\t-plotting: \t\t{end - start2}")
-    print(f"K tensor fit: K_x={K_fit[0,0]:.2f}, K_y={K_fit[1,1]:.2f}, K_z={K_fit[2,2]:.2f}")
 
-    print("All done!")
+    if plot_points:
+        eigvals, eigvecs = np.linalg.eigh(K_fit)
+        order = np.argsort(eigvals)[::-1]
+
+        print("\nFitted conductivity tensor K:")
+        # Print with formatted 3x3 matrix specifically
+        for row in K_fit:
+            print(f"[{row[0]:>12.4e}, {row[1]:>12.4e}, {row[2]:>12.4e}]")
+
+        print("\nPrincipal conductivities:")
+        print(eigvals[order])
+
+        print("\nPrincipal directions (columns):")
+        print(eigvecs[:, order])
+
+    print("\nAll done!")
