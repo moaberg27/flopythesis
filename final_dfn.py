@@ -6,6 +6,7 @@ This is an example of a model.
 
 import datetime
 import os
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -43,7 +44,6 @@ if __name__ == "__main__":
     # name ="p32_case11"
     path = os.path.join(
         r"C:\Users\SEMB94861\Flopy\flopythesis\csv_files", "fracs_connected_properties.csv")
-    # path = os.path.join(r"C:\Users\seet92866\PycharmProjects\DFN_exjobb\2", "15000fracs.csv")
     reload = False
     fracture_import_kwargs = dict(
         radius_str="EquivRadius[m]",
@@ -62,7 +62,7 @@ if __name__ == "__main__":
     print("DFN  importing from file")
     dfn_org.import_fractures_from_file(path, **fracture_import_kwargs)
 
-    # Rotation sequence from c_rotation setup
+    # Rotation sequence setup
     tilt_y_angles = list(range(15, 90, 15))  # 15, 30, ..., 75
     z_angles = list(range(15, 90, 15))  # 15, 30, ..., 75
     z_angles_no_tilt = list(range(15, 90, 15))  # 15, 30, ..., 75
@@ -166,15 +166,17 @@ if __name__ == "__main__":
             else:
                 A = regbox.xl * regbox.yl
 
-            # Rotate regbox utilizing our angles
-            # To match the z_deg, x_deg, y_deg of the r_matrix (zxy order):
-            # regbox internal rotations are applied sequentially.
-            # We must apply z, then y, then x (but regbox.rotate order must match how rotation_matrix_zxy is built, rx @ ry @ rz)
-            # Actually, regbox vector logic depends on how it applies:
-            # We can also just set x_vec, y_vec, z_vec directly
-            regbox.x_vec = r_matrix @ np.array([1, 0, 0])
-            regbox.y_vec = r_matrix @ np.array([0, 1, 0])
-            regbox.z_vec = r_matrix @ np.array([0, 0, 1])
+            # Rotate regbox using extrinsic (lab-frame) rotations
+            # Apply rotations in reverse order of the matrix multiplication to get the same result
+            if y_deg:
+                regbox.rotate(angle=y_deg, axis=[0, 1, 0])
+            if x_deg:
+                regbox.rotate(angle=x_deg, axis=[1, 0, 0])
+            if z_deg:
+                regbox.rotate(angle=z_deg, axis=[0, 0, 1])
+
+            # Standard face names for the rotated local axes
+            face_low, face_high = axis_faces[axis_name]
 
             reg_fracs_in, reg_fracs_out = regbox.check_fractures(
                 dfn.fractures, tree=dfn.tree)
@@ -215,39 +217,44 @@ if __name__ == "__main__":
                 sum_flows = regbox.get_total_flow()/2
                 k_axis = sum_flows * L / (A * (head1 - head0))
 
-            # Add to plotting structures like in c_rotation
-            # We assume flow enters along the local axis positive and negative directions
-            if not np.isnan(k_axis):
-                if axis_name == "x":
-                    n_pos = r_matrix @ np.array([1, 0, 0])
-                    n_neg = r_matrix @ np.array([-1, 0, 0])
-                    plot_points.append(k_axis * n_pos)
-                    plot_points.append(k_axis * n_neg)
-                    plot_dirs.extend([n_pos, n_neg])
-                    plot_colors.extend([FACE_COLORS["+x"], FACE_COLORS["-x"]])
-                    plot_labels.extend([rot_label, rot_label])
-                    plot_face_ids.extend(["+x", "-x"])
-                elif axis_name == "y":
-                    n_pos = r_matrix @ np.array([0, 1, 0])
-                    n_neg = r_matrix @ np.array([0, -1, 0])
-                    plot_points.append(k_axis * n_pos)
-                    plot_points.append(k_axis * n_neg)
-                    plot_dirs.extend([n_pos, n_neg])
-                    plot_colors.extend([FACE_COLORS["+y"], FACE_COLORS["-y"]])
-                    plot_labels.extend([rot_label, rot_label])
-                    plot_face_ids.extend(["+y", "-y"])
-                elif axis_name == "z":
-                    n_pos = r_matrix @ np.array([0, 0, 1])
-                    n_neg = r_matrix @ np.array([0, 0, -1])
-                    plot_points.append(k_axis * n_pos)
-                    plot_points.append(k_axis * n_neg)
-                    plot_dirs.extend([n_pos, n_neg])
-                    plot_colors.extend([FACE_COLORS["+z"], FACE_COLORS["-z"]])
-                    plot_labels.extend([rot_label, rot_label])
-                    plot_face_ids.extend(["+z", "-z"])
-
             print(f"[{axis_name}] Total flow: {sum_flows:.2e} m^3/s")
             print(f"[{axis_name}] k: {k_axis:.2e} m/s")
+
+            # Skip if DFN is not connected (continue with next axis/rotation instead of exiting)
+            if np.isnan(k_axis):
+                print(
+                    f"WARNING: DFN not connected for rot={rot_label}, axis={axis_name}. Skipping this combination.")
+                continue
+
+            # Add to plotting structures like in c_rotation
+            # We assume flow enters along the local axis positive and negative directions
+            if axis_name == "x":
+                n_pos = r_matrix @ np.array([1, 0, 0])
+                n_neg = r_matrix @ np.array([-1, 0, 0])
+                plot_points.append(k_axis * n_pos)
+                plot_points.append(k_axis * n_neg)
+                plot_dirs.extend([n_pos, n_neg])
+                plot_colors.extend([FACE_COLORS["+x"], FACE_COLORS["-x"]])
+                plot_labels.extend([rot_label, rot_label])
+                plot_face_ids.extend(["+x", "-x"])
+            elif axis_name == "y":
+                n_pos = r_matrix @ np.array([0, 1, 0])
+                n_neg = r_matrix @ np.array([0, -1, 0])
+                plot_points.append(k_axis * n_pos)
+                plot_points.append(k_axis * n_neg)
+                plot_dirs.extend([n_pos, n_neg])
+                plot_colors.extend([FACE_COLORS["+y"], FACE_COLORS["-y"]])
+                plot_labels.extend([rot_label, rot_label])
+                plot_face_ids.extend(["+y", "-y"])
+            elif axis_name == "z":
+                n_pos = r_matrix @ np.array([0, 0, 1])
+                n_neg = r_matrix @ np.array([0, 0, -1])
+                plot_points.append(k_axis * n_pos)
+                plot_points.append(k_axis * n_neg)
+                plot_dirs.extend([n_pos, n_neg])
+                plot_colors.extend([FACE_COLORS["+z"], FACE_COLORS["-z"]])
+                plot_labels.extend([rot_label, rot_label])
+                plot_face_ids.extend(["+z", "-z"])
 
             if str(idx+1) not in dfn_plotters and not solve_failed:
                 print(
