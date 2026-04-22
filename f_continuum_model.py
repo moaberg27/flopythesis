@@ -27,7 +27,8 @@ ROOT = Path(__file__).resolve().parent
 IMAGES_DIR = ROOT / "images"
 # CSV_PATH = ROOT / "permeability_tensors_3d_rot_0_360.csv"
 # Use a checked-in tensor CSV that matches expected columns.
-CSV_PATH = ROOT / "csv_files" / "tensor_sim_one.csv"
+# CSV_PATH = ROOT / "csv_files" / "tensor_sim_one.csv"
+CSV_PATH = ROOT / "csv_files" / "ny_rotation_tensor_for_continuum.csv"
 
 # Set to "permeability" for m^2 input or "hydraulic_conductivity" for m/s input.
 CSV_TENSOR_UNITS = "hydraulic_conductivity"
@@ -49,7 +50,7 @@ SIM_WS = ROOT / "continuum_ws"
 H_LEFT = 10.0
 H_RIGHT = 1.0
 H2 = 10.0
-NLAY = 10
+NLAY = 100
 R = 10   # rows
 C = 10   # columns
 X_LEN = 100.0
