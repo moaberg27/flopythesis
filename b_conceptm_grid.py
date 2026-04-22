@@ -43,7 +43,7 @@ class TunnelGridConfig:
     x_len: float = 100.0
     y_len: float = 100.0
     z_len: float = 100.0
-    nlay: int = 10
+    nlay: int = 100
     nrow_base: int = 10
     ncol_base: int = 10
     top: float = 0.0
@@ -52,7 +52,6 @@ class TunnelGridConfig:
     # Level 3 = very fine within 10 m, level 2 = fine within 20 m.
     refinement_distances_m: tuple[float, ...] = (10.0, 20.0, 35.0)
     refinement_levels: tuple[int, ...] = (3, 2, 1)
-
 
     # Output simulation proving DISV compatibility.
     sim_name: str = "conceptm_grid"
@@ -116,8 +115,10 @@ def load_tunnel_geometry(cfg: TunnelGridConfig) -> BaseGeometry:
 def load_tunnel_metadata(cfg: TunnelGridConfig) -> tuple[float, float]:
     """Return tunnel center depth and radius from shapefile attributes."""
     gdf = gpd.read_file(cfg.tunnel_path)
-    depth_m = float(gdf["depth_m"].iloc[0]) if "depth_m" in gdf.columns else cfg.z_len * 0.5
-    radius_m = float(gdf["radius_m"].iloc[0]) if "radius_m" in gdf.columns else 4.0
+    depth_m = float(gdf["depth_m"].iloc[0]
+                    ) if "depth_m" in gdf.columns else cfg.z_len * 0.5
+    radius_m = float(gdf["radius_m"].iloc[0]
+                     ) if "radius_m" in gdf.columns else 4.0
     return depth_m, radius_m
 
 
@@ -153,7 +154,8 @@ def resolve_gridgen_executable(exe_name_or_path: str) -> str:
 
 
 def build_base_modelgrid(cfg: TunnelGridConfig):
-    sim_base = flopy.mf6.MFSimulation(sim_name="base", sim_ws=str(cfg.root / "_tmp_base"))
+    sim_base = flopy.mf6.MFSimulation(
+        sim_name="base", sim_ws=str(cfg.root / "_tmp_base"))
     gwf_base = flopy.mf6.ModflowGwf(sim_base, modelname="base")
     flopy.mf6.ModflowGwfdis(
         gwf_base,
@@ -172,20 +174,23 @@ def build_base_modelgrid(cfg: TunnelGridConfig):
 
 def build_refined_gridprops(cfg: TunnelGridConfig) -> dict:
     if len(cfg.refinement_distances_m) != len(cfg.refinement_levels):
-        raise ValueError("refinement_distances_m and refinement_levels must have same length.")
+        raise ValueError(
+            "refinement_distances_m and refinement_levels must have same length.")
 
     tunnel_geom = load_tunnel_geometry(cfg)
 
     cfg.gridgen_workspace.mkdir(parents=True, exist_ok=True)
     modelgrid = build_base_modelgrid(cfg)
     gridgen_exe = resolve_gridgen_executable(cfg.gridgen_exe)
-    g = Gridgen(modelgrid, model_ws=str(cfg.gridgen_workspace), exe_name=gridgen_exe)
+    g = Gridgen(modelgrid, model_ws=str(
+        cfg.gridgen_workspace), exe_name=gridgen_exe)
 
     # DISV requires same ncpl in each layer, so refinement must be applied to all layers.
     layers = list(range(cfg.nlay))
 
     # Add outer (coarse) first and inner (fine) last.
-    refinement_pairs = list(zip(cfg.refinement_distances_m, cfg.refinement_levels))
+    refinement_pairs = list(
+        zip(cfg.refinement_distances_m, cfg.refinement_levels))
     for distance_m, level in sorted(refinement_pairs, key=lambda x: x[0], reverse=True):
         feature = [tunnel_geom.buffer(distance_m)]
         g.add_refinement_features(feature, "polygon", int(level), layers)
@@ -225,13 +230,17 @@ def plot_refinement_setup(cfg: TunnelGridConfig, tunnel_geom: BaseGeometry) -> P
 
     colors = plt.cm.YlOrRd(np.linspace(0.35, 0.95, len(rings)))
     for (ring, dist, level), color in zip(rings[::-1], colors[::-1]):
-        gpd.GeoSeries([ring]).plot(ax=ax, facecolor=color, edgecolor="black", alpha=0.45)
+        gpd.GeoSeries([ring]).plot(ax=ax, facecolor=color,
+                                   edgecolor="black", alpha=0.45)
         rp = ring.representative_point()
-        ax.text(rp.x, rp.y, f"{dist:.0f} m / L{level}", fontsize=8, ha="center", va="center")
+        ax.text(rp.x, rp.y, f"{dist:.0f} m / L{level}",
+                fontsize=8, ha="center", va="center")
 
-    gpd.GeoSeries([tunnel_geom]).plot(ax=ax, facecolor="steelblue", edgecolor="navy", alpha=0.9)
+    gpd.GeoSeries([tunnel_geom]).plot(
+        ax=ax, facecolor="steelblue", edgecolor="navy", alpha=0.9)
 
-    ax.set_title("Refinement zones around tunnel (distance from tunnel boundary)")
+    ax.set_title(
+        "Refinement zones around tunnel (distance from tunnel boundary)")
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
     ax.set_aspect("equal", adjustable="box")
@@ -341,7 +350,8 @@ def build_flopy_disv_model(cfg: TunnelGridConfig, gridprops: dict) -> tuple[flop
         sim_ws=str(cfg.sim_workspace),
         exe_name=mf6_exe,
     )
-    flopy.mf6.ModflowTdis(sim, time_units="DAYS", nper=1, perioddata=[(1.0, 1, 1.0)])
+    flopy.mf6.ModflowTdis(sim, time_units="DAYS", nper=1,
+                          perioddata=[(1.0, 1, 1.0)])
     flopy.mf6.ModflowIms(sim, complexity="SIMPLE")
 
     gwf = flopy.mf6.ModflowGwf(sim, modelname=cfg.sim_name, save_flows=True)
@@ -405,7 +415,8 @@ def main() -> None:
     if mesh_png is not None:
         print(f"Saved grid-mesh plot: {mesh_png}")
         if not cfg.show_pyvista_interactive:
-            print("Set show_pyvista_interactive=True in TunnelGridConfig for interactive PyVista window.")
+            print(
+                "Set show_pyvista_interactive=True in TunnelGridConfig for interactive PyVista window.")
     else:
         print("Grid mesh VTU file not found, skipped PyVista mesh plot.")
 
