@@ -3,12 +3,7 @@
 This script is intentionally easy to edit:
 - geometry and grid settings are in ConceptualModelConfig
 - initial conditions are controlled in `initial_condition_mode`
-- model can be built, written, and run with FloPy/MODFLOW 6
-
-Note:
-`cells_per_meter=10` means 1000 x 1000 x 1000 cells (= 1e9 cells), which is
-far beyond practical memory limits for normal machines. A safeguard is included.
-"""
+- model can be built, written, and run with FloPy/MODFLOW 6 """
 
 from __future__ import annotations
 
