@@ -65,6 +65,7 @@ cover/
 /cube_rotation_workspace/
 /mf6_cube/
 /mf6lake/
+/simulations/
 
 # Translations
 *.mo
