@@ -22,16 +22,30 @@ logging.basicConfig(level=logging.INFO)
 
 
 # ======================================================
-# Logger (oförändrad)
+# Logger
 # ======================================================
 class Logger(object):
     def __init__(self, filename):
         self.terminal = sys.stdout
         self.log = open(filename, "w", encoding="utf-8")
+        self.newline = True
 
     def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
+        if not message:
+            return
+
+        out = ""
+        for char in message:
+            if self.newline and char != '\n':
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                out += f"{now} INFO "
+                self.newline = False
+            out += char
+            if char == '\n':
+                self.newline = True
+
+        self.terminal.write(out)
+        self.log.write(out)
         self.log.flush()
 
     def flush(self):
@@ -40,7 +54,7 @@ class Logger(object):
 
 
 # ======================================================
-# Rotation helpers (NYTT – ENDA rotationssanningen)
+# Rotation helpers
 # ======================================================
 def apply_rotations(regbox, rotations):
     for angle, axis in rotations:
@@ -65,9 +79,15 @@ def rotate_vector(v, rotations):
 # Main
 # ======================================================
 if __name__ == "__main__":
-
+    # save figure
     save = True
+    scale = 1
+    tracking = True
+    animate = False
     block_on_final_k_plot = True
+
+    ncoef = 10 * 0 + 10
+    nint = ncoef * 2
 
     start0 = datetime.datetime.now()
 
@@ -78,17 +98,19 @@ if __name__ == "__main__":
 
     sys.stdout = Logger(sim_dir / "terminal_output.txt")
 
-    print(f"\nProgram started at {start0}")
+    print(f"\n---- IMPORT DFN ----")
+    print(f"Program started at {start0}")
     print(f"Simulation output directory: {sim_dir}")
 
     # --------------------------------------------------
     # Load DFN
     # --------------------------------------------------
+    t_load_start = datetime.datetime.now()
     dfn_org = andfn.DFN("DFN test FracMan", discharge_int=50)
 
     path = os.path.join(
         r"C:\Users\SEMB94861\Flopy\flopythesis\csv_files",
-        "fracs_connected_properties.csv",
+        "40000.csv",
     )
 
     fracture_import_kwargs = dict(
@@ -105,9 +127,10 @@ if __name__ == "__main__":
     )
 
     dfn_org.import_fractures_from_file(path, **fracture_import_kwargs)
+    print(f"Time to load DFN: {datetime.datetime.now() - t_load_start}")
 
     # --------------------------------------------------
-    # Rotation configurations (NY STRUKTUR – SAMMA INNEBÖRD)
+    # Rotation configurations
     # --------------------------------------------------
     rotation_configs = []
 
@@ -126,7 +149,7 @@ if __name__ == "__main__":
             rotation_configs.append(
                 (
                     [(ty, (0, 1, 0)), (z, (0, 0, 1))],
-                    ["x", "y", "z"],
+                    ["x", "z"],
                     f"tilt_y{ty}_z{z}",
                 )
             )
@@ -145,7 +168,7 @@ if __name__ == "__main__":
             )
 
     # --------------------------------------------------
-    # Plot & bookkeeping (oförändrat)
+    # Plot & bookkeeping
     # --------------------------------------------------
     plot_points = []
     plot_dirs = []
@@ -165,7 +188,7 @@ if __name__ == "__main__":
         "z": ("top", "bottom"),
     }
 
-    head0, head1 = 100, 200
+    head0, head1 = 200, 100
 
     dfn_plotters = {}
 
@@ -173,14 +196,16 @@ if __name__ == "__main__":
     # Main simulation loop
     # --------------------------------------------------
     for idx, (rotations, active_axes, rot_label) in enumerate(rotation_configs):
-
+        t_rot_start = datetime.datetime.now()
         print(f"\n[{idx+1}/{len(rotation_configs)}] === Rotation {rot_label} ===")
 
         for axis_name in active_axes:
+            t_axis_start = datetime.datetime.now()
             face_low, face_high = axis_faces[axis_name]
 
             dfn = andfn.DFN("Copy", discharge_int=50)
-            dfn.import_fractures_from_file(path, **fracture_import_kwargs)
+            #dfn.import_fractures_from_file(path, **fracture_import_kwargs)
+            dfn.add_fracture(list(dfn_org.fractures))
 
             regbox = andfn.RectangularRegion(
                 label="box",
@@ -221,6 +246,7 @@ if __name__ == "__main__":
                 dfn.fractures, face=face_high, head=head1)
 
             dfn.check_connectivity()
+            # dfn.reset()
             dfn.set_kwargs(
                 COEF_RATIO=0.001,
                 MAX_ITERATIONS=30,
@@ -230,7 +256,11 @@ if __name__ == "__main__":
 
             solve_failed = False
             try:
+                t_solve_start = datetime.datetime.now()
                 dfn.solve(unconsolidate=True)
+                t_solve_end = datetime.datetime.now()
+                print(
+                    f"Time to solve axis {axis_name}: {t_solve_end - t_solve_start}")
             except RuntimeError as exc:
                 solve_failed = True
                 print(
@@ -267,20 +297,49 @@ if __name__ == "__main__":
                     dfn.plot_fractures_head(
                         p1, 40, 10, opacity=1, contour=True
                     )
-                    regbox.plot(p1)
 
-                    img_path = sim_dir / f"dfn_plot_rot{idx+1}_{axis_name}.png"
-                    # Save a screenshot of the PyVista plot
-                    p1.screenshot(img_path)
+                    import pyvista as pv
+                    box_mesh = pv.PolyData(regbox.vertices, regbox.faces)
+
+                    # Colors mapping to actual PyVista output
+                    face_color_list = [
+                        FACE_COLORS["+z"],  # Top
+                        FACE_COLORS["-z"],  # Bottom
+                        FACE_COLORS["+y"],  # Front
+                        FACE_COLORS["-y"],  # Back
+                        FACE_COLORS["-x"],  # Left
+                        FACE_COLORS["+x"]  # Right
+                    ]
+
+                    for i, face_indices in enumerate(regbox.faces.reshape(-1, 5)):
+                        # Single face representation: [4, pt1, pt2, pt3, pt4]
+                        single_face = np.hstack([[4], face_indices[1:]])
+                        face_mesh = pv.PolyData(regbox.vertices, single_face)
+                        p1.add_mesh(
+                            face_mesh, color=face_color_list[i], opacity=0.3, show_edges=True)
+
+                    rotations_dir = sim_dir / "rotations"
+                    rotations_dir.mkdir(parents=True, exist_ok=True)
+                    img_path = rotations_dir / \
+                        f"dfn_plot_rot{idx+1}_{axis_name}.html"
+                    # Save an interactive html of the PyVista plot
+                    p1.export_html(img_path)
 
                     if str(idx+1) not in dfn_plotters:
                         dfn_plotters[str(idx+1)] = {}
-                    dfn_plotters[str(idx+1)][axis_name] = img_path
+                    # Keep path for potential later use
+                    dfn_plotters[str(idx+1)][axis_name] = str(img_path)
                     p1.close()
 
+            print(
+                f"Total time for axis {axis_name}: {datetime.datetime.now() - t_axis_start}")
+        print(
+            f"Total time for rotation {rot_label}: {datetime.datetime.now() - t_rot_start}")
+
     # --------------------------------------------------
-    # ===== PLOTTING & EXPORT (EXAKT SOM ORIGINALTPS) =====
+    # ===== PLOTTING & EXPORT =====
     # --------------------------------------------------
+    t_plot_start = datetime.datetime.now()
     if plot_points:
         points = np.array(plot_points)
         dirs = np.array(plot_dirs)
@@ -363,36 +422,33 @@ if __name__ == "__main__":
             f"    v3 = [{eigvecs[0, 2]:.4f}, {eigvecs[1, 2]:.4f}, {eigvecs[2, 2]:.4f}]\n")
 
         # ====== Export Rotations CSVs ======
-        # Keep copy in original csv_files folder and simulations folder
-        CSV_DIR_ORIG = Path(r"C:\Users\SEMB94861\Flopy\flopythesis\csv_files")
+        # Save only in simulations folder
+        sim_dir.mkdir(parents=True, exist_ok=True)
+        POINTS_CSV_PATH = sim_dir / "ny_rotation_points.csv"
+        TENSOR_CSV_PATH = sim_dir / "ny_rotation_tensor_for_continuum.csv"
 
-        for CSV_DIR in [sim_dir, CSV_DIR_ORIG]:
-            CSV_DIR.mkdir(parents=True, exist_ok=True)
-            POINTS_CSV_PATH = CSV_DIR / "ny_rotation_points.csv"
-            TENSOR_CSV_PATH = CSV_DIR / "ny_rotation_tensor_for_continuum.csv"
-
-            header_points = "point_id,rotation_label,face,kx,ky,kz,k_value,dir_x,dir_y,dir_z\n"
-            with open(POINTS_CSV_PATH, "w", encoding="utf-8", newline="") as f:
-                f.write(header_points)
-                for i, (p, d, r_label, face) in enumerate(zip(points, dirs, rot_ids, face_ids), start=1):
-                    k_val = float(np.linalg.norm(p))
-                    f.write(
-                        f"{i},{r_label},{face},"
-                        f"{p[0]:.10g},{p[1]:.10g},{p[2]:.10g},"
-                        f"{k_val:.10g},{d[0]:.10g},{d[1]:.10g},{d[2]:.10g}\n"
-                    )
-
-            header_tensor = "angle_deg,k_xx,k_xy,k_xz,k_yx,k_yy,k_yz,k_zx,k_zy,k_zz\n"
-            with open(TENSOR_CSV_PATH, "w", encoding="utf-8", newline="") as f:
-                f.write(header_tensor)
+        header_points = "point_id;rotation_label;face;kx;ky;kz;k_value;dir_x;dir_y;dir_z\n"
+        with open(POINTS_CSV_PATH, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(header_points)
+            for i, (p, d, r_label, face) in enumerate(zip(points, dirs, rot_ids, face_ids), start=1):
+                k_val = float(np.linalg.norm(p))
                 f.write(
-                    "0.0,"
-                    f"{K_fit[0, 0]:.10g},{K_fit[0, 1]:.10g},{K_fit[0, 2]:.10g},"
-                    f"{K_fit[1, 0]:.10g},{K_fit[1, 1]:.10g},{K_fit[1, 2]:.10g},"
-                    f"{K_fit[2, 0]:.10g},{K_fit[2, 1]:.10g},{K_fit[2, 2]:.10g}\n"
+                    f"{i};{r_label};{face};"
+                    f"{p[0]:.10g};{p[1]:.10g};{p[2]:.10g};"
+                    f"{k_val:.10g};{d[0]:.10g};{d[1]:.10g};{d[2]:.10g}\n"
                 )
-            print(f"Saved point CSV to: {POINTS_CSV_PATH}")
-            print(f"Saved tensor CSV to: {TENSOR_CSV_PATH}")
+
+        header_tensor = "angle_deg;k_xx;k_xy;k_xz;k_yx;k_yy;k_yz;k_zx;k_zy;k_zz\n"
+        with open(TENSOR_CSV_PATH, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(header_tensor)
+            f.write(
+                "0.0;"
+                f"{K_fit[0, 0]:.10g};{K_fit[0, 1]:.10g};{K_fit[0, 2]:.10g};"
+                f"{K_fit[1, 0]:.10g};{K_fit[1, 1]:.10g};{K_fit[1, 2]:.10g};"
+                f"{K_fit[2, 0]:.10g};{K_fit[2, 1]:.10g};{K_fit[2, 2]:.10g}\n"
+            )
+        print(f"Saved point CSV to: {POINTS_CSV_PATH}")
+        print(f"Saved tensor CSV to: {TENSOR_CSV_PATH}")
 
         # ====== Plot 1: Ellipsoid Fit ======
         def build_ellipsoid_mesh_from_tensor(k_tensor, n_u=60, n_v=30):
@@ -456,69 +512,51 @@ if __name__ == "__main__":
                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
         fig_fit.tight_layout()
+        import pyvista as pv
         if save:
             fig_fit.savefig(sim_dir / "fitted_ellipsoid.png", dpi=300)
 
-        # ====== Plot 2: Image Viewer for DFN Plots ======
-        if dfn_plotters:
-            fig_viewer = plt.figure(figsize=(9, 8))
-            fig_viewer.subplots_adjust(bottom=0.2, top=0.95)
-            ax_viewer = fig_viewer.add_subplot(111)
+            p_ellipsoid = pv.Plotter(off_screen=True)
+            grid = pv.StructuredGrid(ex, ey, ez)
+            pts = pv.PolyData(points)
+            p_ellipsoid.add_mesh(grid, color="lightblue", opacity=0.3)
+            p_ellipsoid.add_points(pts, color="blue", point_size=10.0)
+            p_ellipsoid.export_html(sim_dir / "fitted_ellipsoid.html")
+            p_ellipsoid.close()
 
-            from matplotlib.widgets import TextBox, RadioButtons
-            import matplotlib.image as mpimg
+            # Save VTK formats
+            grid.save(sim_dir / "fitted_ellipsoid_mesh.vtk")
+            pts.save(sim_dir / "fitted_ellipsoid_points.vtk")
 
-            state = {"sim": next(iter(dfn_plotters.keys())), "axis": "x"}
+        # ====== Plot 2: K-values only ======
+        if save:
+            p_points_only = pv.Plotter(off_screen=True)
+            pts = pv.PolyData(points)
+            p_points_only.add_points(pts, color="blue", point_size=10.0)
+            p_points_only.export_html(sim_dir / "k_values_points.html")
+            p_points_only.close()
 
-            def draw_image():
-                sim = state["sim"]
-                axis = state["axis"]
-                if sim in dfn_plotters and axis in dfn_plotters[sim]:
-                    try:
-                        new_img = mpimg.imread(dfn_plotters[sim][axis])
-                        ax_viewer.clear()
-                        ax_viewer.imshow(new_img)
-                        ax_viewer.axis("off")
-                        ax_viewer.set_title(
-                            f"DFN Plot: Simulering {sim}, Gradient: {axis}")
-                        fig_viewer.canvas.draw_idle()
-                    except Exception as e:
-                        print(f"Fel vid inläsning av bild: {e}")
-                else:
-                    ax_viewer.clear()
-                    ax_viewer.text(0.5, 0.5, f"Ingen plot tillgänglig för\nsimulering {sim} axel {axis}",
-                                   ha='center', va='center', fontsize=12)
-                    ax_viewer.axis("off")
-                    ax_viewer.set_title(
-                        f"DFN Plot: Simulering {sim}, Gradient: {axis}")
-                    fig_viewer.canvas.draw_idle()
+        # ====== Plot 3: Connected Mesh of K-values ======
+        if save:
+            try:
+                p_mesh = pv.Plotter(off_screen=True)
+                pts = pv.PolyData(points)
+                # Delaunay 3D skapar ett volume mesh som vi extraherar surface från för att få ett "hölje"
+                mesh = pts.delaunay_3d().extract_surface()
+                p_mesh.add_mesh(mesh, color="lightblue",
+                                opacity=0.5, show_edges=True)
+                p_mesh.add_points(pts, color="blue", point_size=10.0)
+                p_mesh.export_html(sim_dir / "k_values_mesh.html")
+                p_mesh.close()
 
-            ax_radio = fig_viewer.add_axes([0.05, 0.8, 0.1, 0.15])
-            radio = RadioButtons(ax_radio, ('x', 'y', 'z'), active=0)
+                # Spara ned nätet för k-värdena
+                mesh.save(sim_dir / "k_values_connected_mesh.vtk")
+            except Exception as e:
+                print(
+                    f"Kunde inte skapa ett sammanhängande nät av punkterna: {e}")
 
-            def on_radio_click(label):
-                state["axis"] = label
-                draw_image()
-
-            radio.on_clicked(on_radio_click)
-
-            draw_image()
-
-            ax_text = fig_viewer.add_axes([0.35, 0.05, 0.3, 0.075])
-            plot_selector = TextBox(
-                ax_text, "Visa 3D DFN plot nr (1-66): ", initial=state["sim"])
-
-            def submit_plot(text):
-                text = text.strip()
-                if not text:
-                    return
-                if text in dfn_plotters:
-                    state["sim"] = text
-                    draw_image()
-                else:
-                    print(f"Ingen plot hittades för '{text}'.")
-
-            plot_selector.on_submit(submit_plot)
+        print(
+            f"Time to generate plots and CSVs: {datetime.datetime.now() - t_plot_start}")
 
         if block_on_final_k_plot:
             plt.show()
