@@ -70,11 +70,13 @@ if __name__ == "__main__":
     block_on_final_k_plot = True
 
     start0 = datetime.datetime.now()
-
     sim_dir = Path(
         r"C:\Users\SEMB94861\Flopy\flopythesis\simulations"
     ) / start0.strftime("%Y%m%d_%H%M%S")
     sim_dir.mkdir(parents=True, exist_ok=True)
+
+    plots_dir = sim_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
 
     sys.stdout = Logger(sim_dir / "terminal_output.txt")
 
@@ -248,6 +250,9 @@ if __name__ == "__main__":
             if np.isnan(k_axis):
                 continue
 
+            print(
+                f"Calculated k_{axis_name}n for rotation {idx+1} ({rot_label}): {k_axis:.6e} m/s")
+
             n_pos = rotate_vector(v0, rotations)
             n_neg = -n_pos
 
@@ -269,7 +274,8 @@ if __name__ == "__main__":
                     )
                     regbox.plot(p1)
 
-                    img_path = sim_dir / f"dfn_plot_rot{idx+1}_{axis_name}.png"
+                    img_path = plots_dir / \
+                        f"dfn_plot_rot{idx+1}_{axis_name}.png"
                     # Save a screenshot of the PyVista plot
                     p1.screenshot(img_path)
 
@@ -324,19 +330,27 @@ if __name__ == "__main__":
 
         K_fit, A, rmse_val = fit_tensor_least_squares(dirs, k_meas)
 
-        print("Rank(A):", np.linalg.matrix_rank(A))
+        summary_lines = []
+
+        def log_and_print(text):
+            print(text)
+            summary_lines.append(text)
+
+        log_and_print(f"Rank(A): {np.linalg.matrix_rank(A)}")
 
         expected_points = 6 + 4 * 4 + 5 * \
             (4 + 6 * 5) + 5 * (4 + 4 * 5)  # Est. from original logic
-        print("Total points:", len(points), f"(expected ~{expected_points})")
+        log_and_print(
+            f"Total points: {len(points)} (expected ~{expected_points})")
 
         rot_order = list(dict.fromkeys(rot_ids.tolist()))
         for rot_label in rot_order:
             mask = rot_ids == rot_label
             unique_faces = sorted(set(face_ids[i] for i in np.where(mask)[0]))
-            print(f"{rot_label}: {np.sum(mask)} pkt, faces={unique_faces}")
+            log_and_print(
+                f"{rot_label}: {np.sum(mask)} pkt, faces={unique_faces}")
 
-        print(
+        log_and_print(
             f"RMSE residual (least squares): {rmse_val:.6e} (0 = perfect ellipsoid)")
 
         Kxx, Kxy, Kxz = K_fit[0, 0], K_fit[0, 1], K_fit[0, 2]
@@ -348,51 +362,53 @@ if __name__ == "__main__":
         eigvals = evals_print[order_idx]
         eigvecs = evecs_print[:, order_idx]
 
-        print("\nFitted 3D conductivity tensor")
-        print(f"  K = [[{Kxx:.4e}, {Kxy:.4e}, {Kxz:.4e}],")
-        print(f"       [{Kxy:.4e}, {Kyy:.4e}, {Kyz:.4e}],")
-        print(f"       [{Kxz:.4e}, {Kyz:.4e}, {Kzz:.4e}]]")
-        print(
+        log_and_print("\nFitted 3D conductivity tensor")
+        log_and_print(f"  K = [[{Kxx:.4e}, {Kxy:.4e}, {Kxz:.4e}],")
+        log_and_print(f"       [{Kxy:.4e}, {Kyy:.4e}, {Kyz:.4e}],")
+        log_and_print(f"       [{Kxz:.4e}, {Kyz:.4e}, {Kzz:.4e}]]")
+        log_and_print(
             f"  Principal values: k1 = {eigvals[0]:.4e}, k2 = {eigvals[1]:.4e}, k3 = {eigvals[2]:.4e}")
-        print("  Principal axes:")
-        print(
+        log_and_print("  Principal axes:")
+        log_and_print(
             f"    v1 = [{eigvecs[0, 0]:.4f}, {eigvecs[1, 0]:.4f}, {eigvecs[2, 0]:.4f}]")
-        print(
+        log_and_print(
             f"    v2 = [{eigvecs[0, 1]:.4f}, {eigvecs[1, 1]:.4f}, {eigvecs[2, 1]:.4f}]")
-        print(
+        log_and_print(
             f"    v3 = [{eigvecs[0, 2]:.4f}, {eigvecs[1, 2]:.4f}, {eigvecs[2, 2]:.4f}]\n")
 
+        # Save summary to file
+        summary_path = sim_dir / "tensor_summary.txt"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(summary_lines))
+        print(f"Saved tensor summary to: {summary_path}")
+
         # ====== Export Rotations CSVs ======
-        # Keep copy in original csv_files folder and simulations folder
-        CSV_DIR_ORIG = Path(r"C:\Users\SEMB94861\Flopy\flopythesis\csv_files")
+        # Save only in simulations folder
+        POINTS_CSV_PATH = sim_dir / "ny_rotation_points.csv"
+        TENSOR_CSV_PATH = sim_dir / "ny_rotation_tensor_for_continuum.csv"
 
-        for CSV_DIR in [sim_dir, CSV_DIR_ORIG]:
-            CSV_DIR.mkdir(parents=True, exist_ok=True)
-            POINTS_CSV_PATH = CSV_DIR / "ny_rotation_points.csv"
-            TENSOR_CSV_PATH = CSV_DIR / "ny_rotation_tensor_for_continuum.csv"
-
-            header_points = "point_id,rotation_label,face,kx,ky,kz,k_value,dir_x,dir_y,dir_z\n"
-            with open(POINTS_CSV_PATH, "w", encoding="utf-8", newline="") as f:
-                f.write(header_points)
-                for i, (p, d, r_label, face) in enumerate(zip(points, dirs, rot_ids, face_ids), start=1):
-                    k_val = float(np.linalg.norm(p))
-                    f.write(
-                        f"{i},{r_label},{face},"
-                        f"{p[0]:.10g},{p[1]:.10g},{p[2]:.10g},"
-                        f"{k_val:.10g},{d[0]:.10g},{d[1]:.10g},{d[2]:.10g}\n"
-                    )
-
-            header_tensor = "angle_deg,k_xx,k_xy,k_xz,k_yx,k_yy,k_yz,k_zx,k_zy,k_zz\n"
-            with open(TENSOR_CSV_PATH, "w", encoding="utf-8", newline="") as f:
-                f.write(header_tensor)
+        header_points = "point_id;rotation_label;face;kx;ky;kz;k_value;dir_x;dir_y;dir_z\n"
+        with open(POINTS_CSV_PATH, "w", encoding="utf-8", newline="") as f:
+            f.write(header_points)
+            for i, (p, d, r_label, face) in enumerate(zip(points, dirs, rot_ids, face_ids), start=1):
+                k_val = float(np.linalg.norm(p))
                 f.write(
-                    "0.0,"
-                    f"{K_fit[0, 0]:.10g},{K_fit[0, 1]:.10g},{K_fit[0, 2]:.10g},"
-                    f"{K_fit[1, 0]:.10g},{K_fit[1, 1]:.10g},{K_fit[1, 2]:.10g},"
-                    f"{K_fit[2, 0]:.10g},{K_fit[2, 1]:.10g},{K_fit[2, 2]:.10g}\n"
+                    f"{i};{r_label};{face};"
+                    f"{p[0]:.10g};{p[1]:.10g};{p[2]:.10g};"
+                    f"{k_val:.10g};{d[0]:.10g};{d[1]:.10g};{d[2]:.10g}\n"
                 )
-            print(f"Saved point CSV to: {POINTS_CSV_PATH}")
-            print(f"Saved tensor CSV to: {TENSOR_CSV_PATH}")
+
+        header_tensor = "angle_deg;k_xx;k_xy;k_xz;k_yx;k_yy;k_yz;k_zx;k_zy;k_zz\n"
+        with open(TENSOR_CSV_PATH, "w", encoding="utf-8", newline="") as f:
+            f.write(header_tensor)
+            f.write(
+                "0.0;"
+                f"{K_fit[0, 0]:.10g};{K_fit[0, 1]:.10g};{K_fit[0, 2]:.10g};"
+                f"{K_fit[1, 0]:.10g};{K_fit[1, 1]:.10g};{K_fit[1, 2]:.10g};"
+                f"{K_fit[2, 0]:.10g};{K_fit[2, 1]:.10g};{K_fit[2, 2]:.10g}\n"
+            )
+        print(f"Saved point CSV to: {POINTS_CSV_PATH}")
+        print(f"Saved tensor CSV to: {TENSOR_CSV_PATH}")
 
         # ====== Plot 1: Ellipsoid Fit ======
         def build_ellipsoid_mesh_from_tensor(k_tensor, n_u=60, n_v=30):
@@ -457,7 +473,7 @@ if __name__ == "__main__":
 
         fig_fit.tight_layout()
         if save:
-            fig_fit.savefig(sim_dir / "fitted_ellipsoid.png", dpi=300)
+            fig_fit.savefig(plots_dir / "fitted_ellipsoid.png", dpi=300)
 
         # ====== Plot 2: Image Viewer for DFN Plots ======
         if dfn_plotters:
@@ -519,6 +535,109 @@ if __name__ == "__main__":
                     print(f"Ingen plot hittades för '{text}'.")
 
             plot_selector.on_submit(submit_plot)
+
+        # --- Additional Advanced 3D Plots (Convex Hull, Shell, scatter etc.) ---
+        import pyvista as pv
+        from scipy.spatial import ConvexHull
+
+        all_points = points
+        fit_points = points
+
+        # --- 3D scatter plot
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection="3d")
+        ax.scatter(fit_points[:, 0], fit_points[:, 1], fit_points[:, 2],
+                   c="red", marker="o", s=10, label="Fit measurements")
+        ax.set_xlabel("Conductivity x")
+        ax.set_ylabel("Conductivity y")
+        ax.set_zlabel("Conductivity z")
+        ax.set_title("3D Effective Conductivity - Rotation Grid Sampling")
+        ax.legend()
+        for azim in (30, 120, 210, 300):
+            ax.view_init(elev=20, azim=azim)
+            fig.savefig(plots_dir / f"scatter_3d_azim{azim:03d}.png",
+                        dpi=200, bbox_inches="tight")
+        ax.view_init(elev=20, azim=30)
+        plt.show(block=False)
+
+        # --- Convex hull surface
+        if len(all_points) >= 4:
+            hull = ConvexHull(all_points)
+            faces = hull.simplices
+            pv_faces = np.column_stack([np.full(len(faces), 3), faces]).ravel()
+            surface = pv.PolyData(all_points, pv_faces)
+            plotter_hull = pv.Plotter(title="Convex Hull", off_screen=False)
+            plotter_hull.add_mesh(surface, color="cyan", opacity=0.5, show_edges=True,
+                                  label="Convex Hull Surface")
+            plotter_hull.add_points(fit_points, color="red", point_size=10,
+                                    label="Fit measurements")
+            plotter_hull.add_legend()
+            plotter_hull.add_axes()
+            plotter_hull.camera_position = "iso"
+            plotter_hull.show(screenshot=str(plots_dir / "convex_hull.png"),
+                              auto_close=False, interactive_update=True)
+            plotter_hull.export_html(str(plots_dir / "convex_hull.html"))
+            surface.save(str(plots_dir / "convex_hull.vtk"))
+
+            # --- Fitted "k-surface": r(n) = (n . K . n) * n
+            sphere = pv.Sphere(
+                radius=1.0, theta_resolution=50, phi_resolution=50)
+            sphere_pts = np.array(sphere.points)
+            k_dir = np.einsum("ij,ij->i", sphere_pts @ K_fit, sphere_pts)
+            ellipsoid = sphere.copy()
+            ellipsoid.points = sphere_pts * k_dir[:, None]
+
+            plotter = pv.Plotter(
+                title="Fitted k-surface (ellipsoid)", off_screen=False)
+            plotter.add_mesh(ellipsoid, color="lightblue", opacity=0.4,
+                             label="Fitted k-surface")
+            plotter.add_points(fit_points, color="red", point_size=8,
+                               label="Fit measurements")
+            labels = ["k1 (max)", "k2 (mid)", "k3 (min)"]
+            for i, c in enumerate(["red", "green", "blue"]):
+                axis = eigvecs[:, i] * eigvals[i]
+                plotter.add_arrows(np.zeros((1, 3)), axis.reshape(1, 3),
+                                   color=c, mag=1)
+                # Plot labels disabled to avoid pyvista text rendering issues on some setups,
+                # but arrows will show the principal directions!
+
+            plotter.add_axes()
+            plotter.camera_position = "iso"
+            plotter.show(screenshot=str(plots_dir / "ellipsoid_k_surface.png"),
+                         auto_close=False, interactive_update=True)
+            plotter.export_html(str(plots_dir / "ellipsoid_k_surface.html"))
+            ellipsoid.save(str(plots_dir / "ellipsoid_k_surface.vtk"))
+
+            # --- Triangulated shell surface of the measured ellipsoid
+            shell_norms = np.linalg.norm(all_points, axis=1, keepdims=True)
+            shell_unit = all_points / \
+                np.where(shell_norms > 0, shell_norms, 1.0)
+            shell_hull = ConvexHull(shell_unit)
+            shell_faces = np.hstack([
+                np.full((len(shell_hull.simplices), 1), 3, dtype=np.intp),
+                shell_hull.simplices,
+            ]).ravel()
+            shell_mesh = pv.PolyData(all_points, shell_faces)
+
+            point_cloud = pv.PolyData(all_points)
+            point_cloud["point_id"] = np.arange(
+                1, len(all_points) + 1, dtype=int)
+
+            plotter_shell = pv.Plotter(
+                title="Measured Ellipsoid Shell", off_screen=False)
+            plotter_shell.add_mesh(shell_mesh, color="lightsteelblue",
+                                   opacity=0.30, show_edges=True)
+            plotter_shell.add_points(point_cloud, color="darkred", point_size=10,
+                                     label="Measurement points")
+            plotter_shell.add_axes()
+            plotter_shell.add_title(
+                f"Measured Ellipsoid - Triangulated Shell\n({len(all_points)} points)"
+            )
+            plotter_shell.camera_position = "iso"
+            plotter_shell.show(screenshot=str(plots_dir / "shell.png"),
+                               auto_close=False, interactive_update=True)
+            plotter_shell.export_html(str(plots_dir / "shell.html"))
+            shell_mesh.save(str(plots_dir / "shell.vtk"))
 
         if block_on_final_k_plot:
             plt.show()
