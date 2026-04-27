@@ -39,6 +39,27 @@ class Logger(object):
         self.log.flush()
 
 
+def setup_run_dir(base="runs"):
+    """Create a timestamped output directory and attach a file logger to it."""
+    run_dir = os.path.join(
+        base, datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+    os.makedirs(run_dir, exist_ok=True)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    fmt = logging.Formatter("%(asctime)s  %(levelname)s  %(message)s")
+    fh = logging.FileHandler(os.path.join(
+        run_dir, "run.log"), encoding="utf-8")
+    fh.setFormatter(fmt)
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    root.addHandler(fh)
+    root.addHandler(sh)
+    return run_dir
+
+
 # ======================================================
 # Rotation helpers
 # ======================================================
@@ -66,7 +87,8 @@ def rotate_vector(v, rotations):
 # ======================================================
 if __name__ == "__main__":
 
-    save = True
+    save = True  # Sparar tensor_summary och slutgiltiga plots
+    save_rotation_plots = False  # För att spara 3D-bilder för VARJE enskild rotation
     block_on_final_k_plot = True
 
     start0 = datetime.datetime.now()
@@ -181,108 +203,132 @@ if __name__ == "__main__":
         for axis_name in active_axes:
             face_low, face_high = axis_faces[axis_name]
 
-            dfn = andfn.DFN("Copy", discharge_int=50)
-            dfn.import_fractures_from_file(path, **fracture_import_kwargs)
+            # Vi kör två simuleringar per axel, en för negativ riktning och en för positiv.
+            for direction_flow in ["neg", "pos"]:
+                dfn = andfn.DFN("Copy", discharge_int=50)
+                dfn.import_fractures_from_file(path, **fracture_import_kwargs)
 
-            regbox = andfn.RectangularRegion(
-                label="box",
-                center=[0, 0, 0],
-                x_vec=[1, 0, 0],
-                y_vec=[0, 1, 0],
-                z_vec=[0, 0, 1],
-                xl=500,
-                yl=500,
-                zl=500,
-            )
+                regbox = andfn.RectangularRegion(
+                    label="box",
+                    center=[0, 0, 0],
+                    x_vec=[1, 0, 0],
+                    y_vec=[0, 1, 0],
+                    z_vec=[0, 0, 1],
+                    xl=500,
+                    yl=500,
+                    zl=500,
+                )
 
-            apply_rotations(regbox, rotations)
+                apply_rotations(regbox, rotations)
 
-            if axis_name == "x":
-                L = regbox.xl
-                A = regbox.yl * regbox.zl
-                v0 = np.array([1, 0, 0])
-                faces = ("+x", "-x")
-            elif axis_name == "y":
-                L = regbox.yl
-                A = regbox.xl * regbox.zl
-                v0 = np.array([0, 1, 0])
-                faces = ("+y", "-y")
-            else:
-                L = regbox.zl
-                A = regbox.xl * regbox.yl
-                v0 = np.array([0, 0, 1])
-                faces = ("+z", "-z")
+                if axis_name == "x":
+                    L = regbox.xl
+                    A = regbox.yl * regbox.zl
+                    v0 = np.array([1, 0, 0])
+                    faces = ("+x", "-x")
+                elif axis_name == "y":
+                    L = regbox.yl
+                    A = regbox.xl * regbox.zl
+                    v0 = np.array([0, 1, 0])
+                    faces = ("+y", "-y")
+                else:
+                    L = regbox.zl
+                    A = regbox.xl * regbox.yl
+                    v0 = np.array([0, 0, 1])
+                    faces = ("+z", "-z")
 
-            reg_fracs_in, reg_fracs_out = regbox.check_fractures(
-                dfn.fractures, tree=dfn.tree
-            )
-            dfn.delete_fracture(reg_fracs_out)
+                reg_fracs_in, reg_fracs_out = regbox.check_fractures(
+                    dfn.fractures, tree=dfn.tree
+                )
+                dfn.delete_fracture(reg_fracs_out)
 
-            regbox.frac_intersections(dfn.fractures, face=face_low, head=head0)
-            regbox.frac_intersections(
-                dfn.fractures, face=face_high, head=head1)
+                # Om vi endast kör från ena hållet
+                # regbox.frac_intersections (dfn.fractures, face= face:low, head = head0)
+                # regbox.fract_intersections(
+                #    dfn.fractures, face=face_high, head=head1
+                #
 
-            dfn.check_connectivity()
-            dfn.set_kwargs(
-                COEF_RATIO=0.001,
-                MAX_ITERATIONS=30,
-                MAX_NCOEF=200,
-                MAX_ERROR=5e-4,
-            )
+                if direction_flow == "neg":
+                    # Flöde mot -x: Högre head på +x (face_high), lägre på -x (face_low)
+                    regbox.frac_intersections(
+                        dfn.fractures, face=face_low, head=head0)
+                    regbox.frac_intersections(
+                        dfn.fractures, face=face_high, head=head1)
+                    target_face = faces[1]  # "-x"
+                    target_vec = -v0
+                else:
+                    # Flöde mot +x: Högre head på -x (face_low), lägre på +x (face_high)
+                    regbox.frac_intersections(
+                        dfn.fractures, face=face_low, head=head1)
+                    regbox.frac_intersections(
+                        dfn.fractures, face=face_high, head=head0)
+                    target_face = faces[0]  # "+x"
+                    target_vec = v0
 
-            solve_failed = False
-            try:
-                dfn.solve(unconsolidate=True)
-            except RuntimeError as exc:
-                solve_failed = True
-                print(
-                    f"Solver failed for rot={rot_label}, axis={axis_name}: {exc}")
+                dfn.check_connectivity()
+                dfn.set_kwargs(
+                    COEF_RATIO=0.001,
+                    MAX_ITERATIONS=30,
+                    MAX_NCOEF=200,
+                    MAX_ERROR=5e-4,
+                )
 
-            start2 = datetime.datetime.now()
-
-            if solve_failed:
-                sum_flows = np.nan
-                k_axis = np.nan
-            else:
-                sum_flows = regbox.get_total_flow() / 2.0
-                k_axis = sum_flows * L / (A * (head1 - head0))
-
-            if np.isnan(k_axis):
-                continue
-
-            print(
-                f"Calculated k_{axis_name}n for rotation {idx+1} ({rot_label}): {k_axis:.6e} m/s")
-
-            n_pos = rotate_vector(v0, rotations)
-            n_neg = -n_pos
-
-            plot_points.extend([k_axis * n_pos, k_axis * n_neg])
-            plot_dirs.extend([n_pos, n_neg])
-            plot_colors.extend([FACE_COLORS[faces[0]], FACE_COLORS[faces[1]]])
-            plot_labels.extend([rot_label, rot_label])
-            plot_face_ids.extend([faces[0], faces[1]])
-
-            if not solve_failed:
-                if save:
+                solve_failed = False
+                try:
+                    dfn.solve(unconsolidate=True)
+                except RuntimeError as exc:
+                    solve_failed = True
                     print(
-                        f"\n---- SAVING DFN PLOT FOR ROTATION {idx+1} ({axis_name}-direction solve) ----")
-                    p1 = dfn.initiate_plotter(
-                        title=True, off_screen=True, scale=1, axis=True)
+                        f"Solver failed for rot={rot_label}, axis={axis_name}, dir={direction_flow}: {exc}")
 
-                    dfn.plot_fractures_head(
-                        p1, 40, 10, opacity=1, contour=True
-                    )
-                    regbox.plot(p1)
+                start2 = datetime.datetime.now()
 
-                    img_path = plots_dir / \
-                        f"dfn_plot_rot{idx+1}_{axis_name}.png"
-                    # Save a screenshot of the PyVista plot
-                    p1.screenshot(img_path)
+                if solve_failed:
+                    sum_flows = np.nan
+                    k_axis = np.nan
+                else:
+                    sum_flows = regbox.get_total_flow() / 2.0
+                    k_axis = sum_flows * L / (A * (head1 - head0))
 
-                    if str(idx+1) not in dfn_plotters:
-                        dfn_plotters[str(idx+1)] = {}
-                    dfn_plotters[str(idx+1)][axis_name] = img_path
-                    p1.close()
+                if np.isnan(k_axis):
+                    continue
+
+                print(
+                    f"Calculated k_{axis_name}n ({direction_flow}) för rotation {idx+1} ({rot_label}): {k_axis:.6e} m/s")
+
+                n_rotated = rotate_vector(target_vec, rotations)
+
+                plot_points.append(k_axis * n_rotated)
+                plot_dirs.append(n_rotated)
+                plot_colors.append(FACE_COLORS[target_face])
+                plot_labels.append(rot_label)
+                plot_face_ids.append(target_face)
+
+                if not solve_failed:
+                    if save_rotation_plots:
+                        print(
+                            f"\n---- SAVING DFN PLOT FOR ROTATION {idx+1} ({axis_name}-direction, {direction_flow}) ----")
+                        p1 = dfn.initiate_plotter(
+                            title=True, off_screen=True, scale=1, axis=True)
+
+                        dfn.plot_fractures_head(
+                            p1, 40, 10, opacity=1, contour=True
+                        )
+                        regbox.plot(p1)
+
+                        img_path = plots_dir / \
+                            f"dfn_plot_rot{idx+1}_{axis_name}_{direction_flow}.png"
+                        html_path = plots_dir / \
+                            f"dfn_plot_rot{idx+1}_{axis_name}_{direction_flow}.html"
+                        # Save a screenshot of the PyVista plot
+                        p1.screenshot(img_path)
+                        p1.export_html(str(html_path))
+
+                        if str(idx+1) not in dfn_plotters:
+                            dfn_plotters[str(idx+1)] = {}
+                        dfn_plotters[str(
+                            idx+1)][f"{axis_name}_{direction_flow}"] = img_path
+                        p1.close()
 
     # --------------------------------------------------
     # ===== PLOTTING & EXPORT =====
@@ -328,7 +374,31 @@ if __name__ == "__main__":
             rmse = float(np.sqrt(np.mean((k_values - k_pred) ** 2)))
             return k_tensor, design, rmse
 
-        K_fit, A, rmse_val = fit_tensor_least_squares(dirs, k_meas)
+        K_fit, A, rmse_fit = fit_tensor_least_squares(dirs, k_meas)
+
+        # Skapa en random 90/10 split för anpassning resp. validering
+        num_pts = len(k_meas)
+        indices = np.random.permutation(num_pts)
+        val_size = max(1, int(0.1 * num_pts))
+        val_idx = indices[:val_size]
+        fit_idx = indices[val_size:]
+
+        fit_dirs = dirs[fit_idx]
+        fit_k = k_meas[fit_idx]
+        val_dirs = dirs[val_idx]
+        val_k = k_meas[val_idx]
+
+        # Omkalkylera anpassningen medbart på träningspunkterna (90%)
+        K_fit, A, rmse_fit = fit_tensor_least_squares(fit_dirs, fit_k)
+
+        # Beräkna RMSE för valideringsdatan (hold-out)
+        nx, ny, nz = val_dirs[:, 0], val_dirs[:, 1], val_dirs[:, 2]
+        A_val = np.column_stack(
+            [nx**2, 2*nx*ny, 2*nx*nz, ny**2, 2*ny*nz, nz**2])
+        coef_fit = np.array(
+            [K_fit[0, 0], K_fit[0, 1], K_fit[0, 2], K_fit[1, 1], K_fit[1, 2], K_fit[2, 2]])
+        k_pred_val = A_val @ coef_fit
+        rmse_val = float(np.sqrt(np.mean((val_k - k_pred_val) ** 2)))
 
         summary_lines = []
 
@@ -351,7 +421,7 @@ if __name__ == "__main__":
                 f"{rot_label}: {np.sum(mask)} pkt, faces={unique_faces}")
 
         log_and_print(
-            f"RMSE residual (least squares): {rmse_val:.6e} (0 = perfect ellipsoid)")
+            f"RMSE residual (least squares, fit set): {rmse_fit:.6e} (0 = perfect ellipsoid)")
 
         Kxx, Kxy, Kxz = K_fit[0, 0], K_fit[0, 1], K_fit[0, 2]
         Kyy, Kyz = K_fit[1, 1], K_fit[1, 2]
@@ -376,11 +446,135 @@ if __name__ == "__main__":
         log_and_print(
             f"    v3 = [{eigvecs[0, 2]:.4f}, {eigvecs[1, 2]:.4f}, {eigvecs[2, 2]:.4f}]\n")
 
+        for i in range(3):
+            summary_lines.append(
+                f"    v{i+1} = [{eigvecs[0, i]:.4f}, {eigvecs[1, i]:.4f}, {eigvecs[2, i]:.4f}]"
+            )
+
+        summary_lines += [
+            "",
+            f"  RMSE on fit directions:        {rmse_fit:.4e}",
+            f"  RMSE on held-out (validation): {rmse_val:.4e}  <- key quality indicator",
+        ]
+
+        # --- SPD-constrained fit & Sanity Check ---
+        import cvxpy as cp
+
+        def build_design_matrix(direction_vectors):
+            nx, ny, nz = direction_vectors[:,
+                                           0], direction_vectors[:, 1], direction_vectors[:, 2]
+            return np.column_stack([nx**2, 2*nx*ny, 2*nx*nz, ny**2, 2*ny*nz, nz**2])
+
+        # Använd datan från vår 90/10 split
+        fit_directions = fit_dirs
+        val_directions = val_dirs
+        cond = np.linalg.cond(A)
+
+        # ---------------------------------------------------------------
+        # SPD-constrained fit via cvxpy: solve the same least-squares but
+        # require K >> 0 (positive semidefinite).
+        # ---------------------------------------------------------------
+        K_SCALE = 1.0 / max(np.max(np.abs(fit_k)), 1e-300)
+        K_var = cp.Variable((3, 3), PSD=True)
+        k_vec = cp.hstack([K_var[0, 0], K_var[0, 1], K_var[0, 2],
+                           K_var[1, 1], K_var[1, 2], K_var[2, 2]])
+        prob = cp.Problem(cp.Minimize(
+            cp.sum_squares(A @ k_vec - fit_k * K_SCALE)))
+
+        # Prova med CLARABEL i första hand, fall tillbaka på standard om den saknas
+        try:
+            prob.solve(solver=cp.CLARABEL)
+        except Exception:
+            prob.solve()
+
+        if K_var.value is None:
+            # Fallback om CVXPY-solvern kraschar totalt
+            K_spd = K_fit.copy()
+        else:
+            K_spd = np.array(K_var.value) / K_SCALE
+
+        K_spd = 0.5 * (K_spd + K_spd.T)
+
+        fit_k_pred_spd = build_design_matrix(fit_directions) @ np.array([
+            K_spd[0, 0], K_spd[0, 1], K_spd[0, 2],
+            K_spd[1, 1], K_spd[1, 2], K_spd[2, 2],
+        ])
+        val_k_pred_spd = build_design_matrix(val_directions) @ np.array([
+            K_spd[0, 0], K_spd[0, 1], K_spd[0, 2],
+            K_spd[1, 1], K_spd[1, 2], K_spd[2, 2],
+        ])
+        rmse_fit_spd = np.sqrt(np.mean((fit_k - fit_k_pred_spd) ** 2))
+        rmse_val_spd = np.sqrt(np.mean((val_k - val_k_pred_spd) ** 2))
+
+        eigvals_spd, eigvecs_spd = np.linalg.eigh(K_spd)
+        order_spd = np.argsort(eigvals_spd)[::-1]
+        eigvals_spd = eigvals_spd[order_spd]
+        eigvecs_spd = eigvecs_spd[:, order_spd]
+
+        summary_lines += [
+            "",
+            "SPD-constrained fit (K >> 0 via cvxpy):",
+            f"  K_spd = [[{K_spd[0, 0]:.4e}, {K_spd[0, 1]:.4e}, {K_spd[0, 2]:.4e}],",
+            f"           [{K_spd[0, 1]:.4e}, {K_spd[1, 1]:.4e}, {K_spd[1, 2]:.4e}],",
+            f"           [{K_spd[0, 2]:.4e}, {K_spd[1, 2]:.4e}, {K_spd[2, 2]:.4e}]]",
+            f"  Principal values (SPD): k1={eigvals_spd[0]:.4e}, k2={eigvals_spd[1]:.4e}, k3={eigvals_spd[2]:.4e}",
+        ]
+
+        for i in range(3):
+            summary_lines.append(
+                f"    v{i+1}_spd = [{eigvecs_spd[0, i]:.4f}, {eigvecs_spd[1, i]:.4f}, {eigvecs_spd[2, i]:.4f}]"
+            )
+
+        summary_lines += [
+            f"  RMSE (fit, SPD):        {rmse_fit_spd:.4e}",
+            f"  RMSE (validation, SPD): {rmse_val_spd:.4e}",
+            f"  cvxpy status: {prob.status}",
+        ]
+
+        # ---------------------------------------------------------------
+        # Axis-aligned sanity check
+        # ---------------------------------------------------------------
+        def _lookup_axis_k(directions, k_values, axis_vec, tol=1e-6):
+            dots = np.abs(directions @ axis_vec)
+            idx = int(np.argmax(dots))
+            return k_values[idx] if dots[idx] > 1 - tol else np.nan
+
+        k_axis = {
+            "x": _lookup_axis_k(dirs, k_meas, np.array([1.0, 0, 0])),
+            "y": _lookup_axis_k(dirs, k_meas, np.array([0, 1.0, 0])),
+            "z": _lookup_axis_k(dirs, k_meas, np.array([0, 0, 1.0])),
+        }
+
+        summary_lines += [
+            "",
+            "Axis-aligned sanity check (direct DFN vs fitted diagonal):",
+            f"  k_x (direct) = {k_axis['x']:.4e}   Kxx (lsq) = {Kxx:.4e}   Kxx (SPD) = {K_spd[0, 0]:.4e}",
+            f"  k_y (direct) = {k_axis['y']:.4e}   Kyy (lsq) = {Kyy:.4e}   Kyy (SPD) = {K_spd[1, 1]:.4e}",
+            f"  k_z (direct) = {k_axis['z']:.4e}   Kzz (lsq) = {Kzz:.4e}   Kzz (SPD) = {K_spd[2, 2]:.4e}",
+            "  (Large |direct - fit| along an axis indicates the tensor is",
+            "   underconstrained in that direction -- e.g. near-2D fracture set.)",
+        ]
+
         # Save summary to file
         summary_path = sim_dir / "tensor_summary.txt"
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write("\n".join(summary_lines))
         print(f"Saved tensor summary to: {summary_path}")
+
+        # Spara tensordatan
+        try:
+            np.savez(sim_dir / "tensor.npz",
+                     K=K_fit, eigvals=eigvals, eigvecs=eigvecs,
+                     rmse_fit=rmse_fit, rmse_val=rmse_val, cond=cond,
+                     K_spd=K_spd, eigvals_spd=eigvals_spd, eigvecs_spd=eigvecs_spd,
+                     rmse_fit_spd=rmse_fit_spd, rmse_val_spd=rmse_val_spd,
+                     k_axis_x=k_axis["x"], k_axis_y=k_axis["y"], k_axis_z=k_axis["z"],
+                     fit_directions=fit_directions, fit_k=fit_k,
+                     val_directions=val_directions, val_k=val_k,
+                     fit_idx=fit_idx, val_idx=val_idx)
+            print(f"Saved tensor.npz to: {sim_dir / 'tensor.npz'}")
+        except Exception as e:
+            print(f"Kunde inte spara tensor.npz: {e}")
 
         # ====== Export Rotations CSVs ======
         # Save only in simulations folder
@@ -475,6 +669,22 @@ if __name__ == "__main__":
         if save:
             fig_fit.savefig(plots_dir / "fitted_ellipsoid.png", dpi=300)
 
+            # Exportera den anpassade ellipsoiden (fitted ellipsoid) som VTK och HTML via PyVista
+            import pyvista as pv
+            grid = pv.StructuredGrid(ex, ey, ez)
+            grid.save(str(plots_dir / "fitted_ellipsoid.vtk"))
+
+            pl_fit = pv.Plotter(off_screen=True)
+            pl_fit.add_mesh(grid, color="#8ecae6", opacity=0.3)
+            
+            # Lägg till våra mätpunkter
+            point_cloud_fit = pv.PolyData(points)
+            pl_fit.add_points(point_cloud_fit, color="red", point_size=8)
+            
+            # Spara som interaktiv HTML
+            pl_fit.export_html(str(plots_dir / "fitted_ellipsoid.html"))
+            pl_fit.close()
+
         # ====== Plot 2: Image Viewer for DFN Plots ======
         if dfn_plotters:
             fig_viewer = plt.figure(figsize=(9, 8))
@@ -484,7 +694,7 @@ if __name__ == "__main__":
             from matplotlib.widgets import TextBox, RadioButtons
             import matplotlib.image as mpimg
 
-            state = {"sim": next(iter(dfn_plotters.keys())), "axis": "x"}
+            state = {"sim": next(iter(dfn_plotters.keys())), "axis": "x_neg"}
 
             def draw_image():
                 sim = state["sim"]
@@ -509,8 +719,9 @@ if __name__ == "__main__":
                         f"DFN Plot: Simulering {sim}, Gradient: {axis}")
                     fig_viewer.canvas.draw_idle()
 
-            ax_radio = fig_viewer.add_axes([0.05, 0.8, 0.1, 0.15])
-            radio = RadioButtons(ax_radio, ('x', 'y', 'z'), active=0)
+            ax_radio = fig_viewer.add_axes([0.05, 0.7, 0.15, 0.25])
+            radio = RadioButtons(
+                ax_radio, ('x_neg', 'x_pos', 'y_neg', 'y_pos', 'z_neg', 'z_pos'), active=0)
 
             def on_radio_click(label):
                 state["axis"] = label
@@ -536,7 +747,7 @@ if __name__ == "__main__":
 
             plot_selector.on_submit(submit_plot)
 
-        # --- Additional Advanced 3D Plots (Convex Hull, Shell, scatter etc.) ---
+        # --- Additional Advanced 3D Plots (Shell, scatter etc.) ---
         import pyvista as pv
         from scipy.spatial import ConvexHull
 
@@ -560,55 +771,8 @@ if __name__ == "__main__":
         ax.view_init(elev=20, azim=30)
         plt.show(block=False)
 
-        # --- Convex hull surface
+        # --- Triangulated shell surface of the measured ellipsoid
         if len(all_points) >= 4:
-            hull = ConvexHull(all_points)
-            faces = hull.simplices
-            pv_faces = np.column_stack([np.full(len(faces), 3), faces]).ravel()
-            surface = pv.PolyData(all_points, pv_faces)
-            plotter_hull = pv.Plotter(title="Convex Hull", off_screen=False)
-            plotter_hull.add_mesh(surface, color="cyan", opacity=0.5, show_edges=True,
-                                  label="Convex Hull Surface")
-            plotter_hull.add_points(fit_points, color="red", point_size=10,
-                                    label="Fit measurements")
-            plotter_hull.add_legend()
-            plotter_hull.add_axes()
-            plotter_hull.camera_position = "iso"
-            plotter_hull.show(screenshot=str(plots_dir / "convex_hull.png"),
-                              auto_close=False, interactive_update=True)
-            plotter_hull.export_html(str(plots_dir / "convex_hull.html"))
-            surface.save(str(plots_dir / "convex_hull.vtk"))
-
-            # --- Fitted "k-surface": r(n) = (n . K . n) * n
-            sphere = pv.Sphere(
-                radius=1.0, theta_resolution=50, phi_resolution=50)
-            sphere_pts = np.array(sphere.points)
-            k_dir = np.einsum("ij,ij->i", sphere_pts @ K_fit, sphere_pts)
-            ellipsoid = sphere.copy()
-            ellipsoid.points = sphere_pts * k_dir[:, None]
-
-            plotter = pv.Plotter(
-                title="Fitted k-surface (ellipsoid)", off_screen=False)
-            plotter.add_mesh(ellipsoid, color="lightblue", opacity=0.4,
-                             label="Fitted k-surface")
-            plotter.add_points(fit_points, color="red", point_size=8,
-                               label="Fit measurements")
-            labels = ["k1 (max)", "k2 (mid)", "k3 (min)"]
-            for i, c in enumerate(["red", "green", "blue"]):
-                axis = eigvecs[:, i] * eigvals[i]
-                plotter.add_arrows(np.zeros((1, 3)), axis.reshape(1, 3),
-                                   color=c, mag=1)
-                # Plot labels disabled to avoid pyvista text rendering issues on some setups,
-                # but arrows will show the principal directions!
-
-            plotter.add_axes()
-            plotter.camera_position = "iso"
-            plotter.show(screenshot=str(plots_dir / "ellipsoid_k_surface.png"),
-                         auto_close=False, interactive_update=True)
-            plotter.export_html(str(plots_dir / "ellipsoid_k_surface.html"))
-            ellipsoid.save(str(plots_dir / "ellipsoid_k_surface.vtk"))
-
-            # --- Triangulated shell surface of the measured ellipsoid
             shell_norms = np.linalg.norm(all_points, axis=1, keepdims=True)
             shell_unit = all_points / \
                 np.where(shell_norms > 0, shell_norms, 1.0)
