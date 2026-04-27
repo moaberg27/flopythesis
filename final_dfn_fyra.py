@@ -17,27 +17,13 @@ import pandas as pd
 
 import andfn
 from andfn import ConstantHeadLine
-
-logging.basicConfig(level=logging.INFO)
-
+from andfn import copy_dfn
 
 # ======================================================
 # Logger
 # ======================================================
-class Logger(object):
-    def __init__(self, filename):
-        self.terminal = sys.stdout
-        self.log = open(filename, "w", encoding="utf-8")
 
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-        self.log.flush()
-
-    def flush(self):
-        self.terminal.flush()
-        self.log.flush()
-
+logger = logging.getLogger("dfn_run")
 
 def setup_run_dir(base="runs"):
     """Create a timestamped output directory and attach a file logger to it."""
@@ -57,8 +43,23 @@ def setup_run_dir(base="runs"):
     sh.setFormatter(fmt)
     root.addHandler(fh)
     root.addHandler(sh)
+    logger.info(f"Logging configured via setup_run_dir in {run_dir}")
     return run_dir
 
+
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "w", encoding="utf-8")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
 
 # ======================================================
 # Rotation helpers
@@ -88,22 +89,27 @@ def rotate_vector(v, rotations):
 if __name__ == "__main__":
 
     save = True  # Sparar tensor_summary och slutgiltiga plots
-    save_rotation_plots = False  # För att spara 3D-bilder för VARJE enskild rotation
+    save_rotation_plots = True  # För att spara 3D-bilder för VARJE enskild rotation
     block_on_final_k_plot = True
 
     start0 = datetime.datetime.now()
-    sim_dir = Path(
-        r"C:\Users\SEMB94861\Flopy\flopythesis\simulations"
-    ) / start0.strftime("%Y%m%d_%H%M%S")
-    sim_dir.mkdir(parents=True, exist_ok=True)
+
+    # Använd vår nya logger-funktion istället för att bygga mappen manuellt
+    sys_dir_str = setup_run_dir(
+        base=r"C:\Users\SEMB94861\Flopy\flopythesis\simulations")
+    sim_dir = Path(sys_dir_str)
 
     plots_dir = sim_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    sys.stdout = Logger(sim_dir / "terminal_output.txt")
+    # Byt ut den gamla terminal-loggern mot the logger vi designat ovan
 
-    print(f"\nProgram started at {start0}")
-    print(f"Simulation output directory: {sim_dir}")
+    logger.info(f"\nProgram started at {start0}")
+    logger.info(f"Simulation output directory: {sim_dir}")
+
+    # Eftersom resten av koden använder `print()`, kan vi slussa den in i the standard library loggern också om vi vill,
+    # men vi behåller din Logger-klass tills vidare för att inte störa existerande kod-flöden i onödan.
+    sys.stdout = Logger(sim_dir / "terminal_output.txt")
 
     # --------------------------------------------------
     # Load DFN
@@ -135,13 +141,15 @@ if __name__ == "__main__":
     # --------------------------------------------------
     rotation_configs = []
 
+    # Initial rotation
     rotation_configs.append(([], ["x", "y", "z"], "start"))
 
+    # Rotation around z-axies
     for z in range(15, 90, 15):
         rotation_configs.append(
             ([(z, (0, 0, 1))], ["x", "y"], f"base_z{z}")
         )
-
+    # Tilting in y and the rotating around z again
     for ty in range(15, 90, 15):
         rotation_configs.append(
             ([(ty, (0, 1, 0))], ["x", "z"], f"tilt_y{ty}")
@@ -154,7 +162,7 @@ if __name__ == "__main__":
                     f"tilt_y{ty}_z{z}",
                 )
             )
-
+    # Tilting in x and the rotating around z again
     for tx in range(15, 90, 15):
         rotation_configs.append(
             ([(tx, (1, 0, 0))], ["y", "z"], f"step3_yz_x{tx}")
@@ -205,8 +213,10 @@ if __name__ == "__main__":
 
             # Vi kör två simuleringar per axel, en för negativ riktning och en för positiv.
             for direction_flow in ["neg", "pos"]:
-                dfn_filter = andfn.DFN("Copy", discharge_int=50)
-                dfn_filter.add_fracture(list(dfn_org.fractures))
+
+                dfn = andfn.DFN("Copy", discharge_int=25)
+                fracture_copy = copy_dfn(dfn_org.fractures)
+                dfn.add_fracture(fracture_copy)
 
                 regbox = andfn.RectangularRegion(
                     label="box",
@@ -238,31 +248,29 @@ if __name__ == "__main__":
                     faces = ("+z", "-z")
 
                 reg_fracs_in, reg_fracs_out = regbox.check_fractures(
-                    dfn_filter.fractures, tree=dfn_filter.tree
+                    dfn.fractures, tree=dfn.tree
                 )
-                dfn = andfn.DFN("Rotated", discharge_int=25)
-                dfn.add_fracture(list(reg_fracs_in))
 
-                # Om vi endast kör från ena hållet
-                # regbox.frac_intersections (dfn.fractures, face= face:low, head = head0)
-                # regbox.fract_intersections(
-                #    dfn.fractures, face=face_high, head=head1
+                dfn.delete_fracture(reg_fracs_out)
+
+                # dfn = andfn.DFN("Rotated", discharge_int=25)
+                # dfn.add_fracture(list(reg_fracs_in))
 
                 if direction_flow == "neg":
-                    # Flöde mot -x: Högre head på +x (face_high), lägre på -x (face_low)
+                    # Flöde mot -x,y,z: Högre head på +x,y,z (face_high), lägre på -x,y,z (face_low)
                     regbox.frac_intersections(
                         dfn.fractures, face=face_low, head=head0)
                     regbox.frac_intersections(
                         dfn.fractures, face=face_high, head=head1)
-                    target_face = faces[1]  # "-x"
+                    target_face = faces[1]  # "-x", "-y" eller "-z"
                     target_vec = -v0
                 else:
-                    # Flöde mot +x: Högre head på -x (face_low), lägre på +x (face_high)
+                    # Flöde mot +x,y,z: Högre head på -x,y,z (face_low), lägre på +x,y,z (face_high)
                     regbox.frac_intersections(
                         dfn.fractures, face=face_low, head=head1)
                     regbox.frac_intersections(
                         dfn.fractures, face=face_high, head=head0)
-                    target_face = faces[0]  # "+x"
+                    target_face = faces[0]  # "+x", "+y" eller "+z"
                     target_vec = v0
 
                 dfn.check_connectivity()
@@ -556,6 +564,35 @@ if __name__ == "__main__":
             "   underconstrained in that direction -- e.g. near-2D fracture set.)",
         ]
 
+        # ---------------------------------------------------------------
+        # Paper-style normalized relative error Er (Wang et al. 2023)
+        # ---------------------------------------------------------------
+        def _paper_k_pred(directions, K_mat):
+            return np.einsum("ij,jk,ik->i", directions, K_mat, directions)
+
+        def _paper_er(k_meas_arr, k_pred):
+            good = np.isfinite(k_pred) & (k_pred > 0) & (k_meas_arr > 0)
+            if not np.any(good):
+                return np.nan
+            return float(np.mean(np.abs(1.0 - k_meas_arr[good] / k_pred[good])))
+
+        k_pred_lsq_all = _paper_k_pred(dirs, K_fit)
+        k_pred_spd_all = _paper_k_pred(dirs, K_spd)
+        er_lsq = _paper_er(k_meas, k_pred_lsq_all)
+        er_spd = _paper_er(k_meas, k_pred_spd_all)
+        er_lsq_val = _paper_er(val_k, _paper_k_pred(val_directions, K_fit))
+        er_spd_val = _paper_er(val_k, _paper_k_pred(val_directions, K_spd))
+
+        summary_lines += [
+            "",
+            "Paper-style normalized relative error Er (Wang et al. 2023, eq. 9):",
+            f"  Er (lsq fit, all directions):  {er_lsq:.4f}",
+            f"  Er (lsq fit, validation only): {er_lsq_val:.4f}",
+            f"  Er (SPD fit, all directions):  {er_spd:.4f}",
+            f"  Er (SPD fit, validation only): {er_spd_val:.4f}",
+            "  (Er < 0.3 is the paper's KREV acceptance threshold.)",
+        ]
+
         # Save summary to file
         summary_path = sim_dir / "tensor_summary.txt"
         with open(summary_path, "w", encoding="utf-8") as f:
@@ -570,6 +607,8 @@ if __name__ == "__main__":
                      K_spd=K_spd, eigvals_spd=eigvals_spd, eigvecs_spd=eigvecs_spd,
                      rmse_fit_spd=rmse_fit_spd, rmse_val_spd=rmse_val_spd,
                      k_axis_x=k_axis["x"], k_axis_y=k_axis["y"], k_axis_z=k_axis["z"],
+                     er_lsq=er_lsq, er_spd=er_spd,
+                     er_lsq_val=er_lsq_val, er_spd_val=er_spd_val,
                      fit_directions=fit_directions, fit_k=fit_k,
                      val_directions=val_directions, val_k=val_k,
                      fit_idx=fit_idx, val_idx=val_idx)
@@ -771,6 +810,51 @@ if __name__ == "__main__":
                         dpi=200, bbox_inches="tight")
         ax.view_init(elev=20, azim=30)
         plt.show(block=False)
+
+        # --- Paper-style hydraulic conductivity ellipsoid (Wang et al. 2023) ---
+        sphere = pv.Sphere(radius=1.0, theta_resolution=50, phi_resolution=50)
+        sphere_pts = np.array(sphere.points)
+
+        eigvals_plot = np.clip(eigvals_spd, 0.0, None)
+        paper_pts = (sphere_pts * np.sqrt(eigvals_plot)) @ eigvecs_spd.T
+        paper_ellipsoid = sphere.copy()
+        paper_ellipsoid.points = paper_pts
+        paper_ellipsoid.save(str(plots_dir / "paper_ellipsoid.vtk"))
+
+        sqrt_fit_points = fit_directions * np.sqrt(fit_k)[:, None]
+        sqrt_val_points = val_directions * np.sqrt(val_k)[:, None]
+
+        plotter_paper = pv.Plotter(
+            title="Paper-style conductivity ellipsoid (sqrt(k))", off_screen=False)
+        plotter_paper.add_mesh(paper_ellipsoid, color="lightgreen", opacity=0.4,
+                               label="sqrt(K) ellipsoid (Wang et al. 2023)")
+        plotter_paper.add_points(sqrt_fit_points, color="red", point_size=8,
+                                 render_points_as_spheres=True,
+                                 label="sqrt(k_meas) * n (fit)")
+        plotter_paper.add_points(sqrt_val_points, color="orange", point_size=12,
+                                 render_points_as_spheres=True,
+                                 label="sqrt(k_meas) * n (validation)")
+        paper_labels = ["sqrt(K1) (max)", "sqrt(K2) (mid)", "sqrt(K3) (min)"]
+        for i, color in enumerate(["red", "green", "blue"]):
+            semi = eigvecs_spd[:, i] * np.sqrt(eigvals_plot[i])
+            plotter_paper.add_arrows(np.zeros((1, 3)), semi.reshape(1, 3),
+                                     color=color, mag=1)
+            plotter_paper.add_point_labels(
+                semi.reshape(1, 3),
+                [f"{paper_labels[i]} = {np.sqrt(eigvals_plot[i]):.4e}"],
+                font_size=12, text_color=color, bold=True,
+            )
+        plotter_paper.add_text(
+            f"Er (SPD, all) = {er_spd:.3f}   Er (SPD, val) = {er_spd_val:.3f}\n"
+            f"(Er < 0.3 -> KREV acceptance)",
+            font_size=10, position="upper_left",
+        )
+        plotter_paper.add_legend()
+        plotter_paper.add_axes()
+        plotter_paper.camera_position = "iso"
+        plotter_paper.export_html(str(plots_dir / "paper_ellipsoid.html"))
+        plotter_paper.show(screenshot=str(plots_dir / "paper_ellipsoid.png"),
+                           auto_close=False, interactive_update=True)
 
         # --- Triangulated shell surface of the measured ellipsoid
         if len(all_points) >= 4:
