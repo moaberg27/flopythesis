@@ -131,7 +131,7 @@ if __name__ == "__main__":
     dfn_org.import_fractures_from_file(path, **fracture_import_kwargs)
 
     # --------------------------------------------------
-    # Rotation configurations (NY STRUKTUR – SAMMA INNEBÖRD)
+    # Rotation configurations
     # --------------------------------------------------
     rotation_configs = []
 
@@ -205,8 +205,8 @@ if __name__ == "__main__":
 
             # Vi kör två simuleringar per axel, en för negativ riktning och en för positiv.
             for direction_flow in ["neg", "pos"]:
-                dfn = andfn.DFN("Copy", discharge_int=50)
-                dfn.import_fractures_from_file(path, **fracture_import_kwargs)
+                dfn_filter = andfn.DFN("Copy", discharge_int=50)
+                dfn_filter.add_fracture(list(dfn_org.fractures))
 
                 regbox = andfn.RectangularRegion(
                     label="box",
@@ -238,15 +238,15 @@ if __name__ == "__main__":
                     faces = ("+z", "-z")
 
                 reg_fracs_in, reg_fracs_out = regbox.check_fractures(
-                    dfn.fractures, tree=dfn.tree
+                    dfn_filter.fractures, tree=dfn_filter.tree
                 )
-                dfn.delete_fracture(reg_fracs_out)
+                dfn = andfn.DFN("Rotated", discharge_int=25)
+                dfn.add_fracture(list(reg_fracs_in))
 
                 # Om vi endast kör från ena hållet
                 # regbox.frac_intersections (dfn.fractures, face= face:low, head = head0)
                 # regbox.fract_intersections(
                 #    dfn.fractures, face=face_high, head=head1
-                #
 
                 if direction_flow == "neg":
                     # Flöde mot -x: Högre head på +x (face_high), lägre på -x (face_low)
@@ -266,6 +266,7 @@ if __name__ == "__main__":
                     target_vec = v0
 
                 dfn.check_connectivity()
+
                 dfn.set_kwargs(
                     COEF_RATIO=0.001,
                     MAX_ITERATIONS=30,
@@ -676,11 +677,11 @@ if __name__ == "__main__":
 
             pl_fit = pv.Plotter(off_screen=True)
             pl_fit.add_mesh(grid, color="#8ecae6", opacity=0.3)
-            
+
             # Lägg till våra mätpunkter
             point_cloud_fit = pv.PolyData(points)
             pl_fit.add_points(point_cloud_fit, color="red", point_size=8)
-            
+
             # Spara som interaktiv HTML
             pl_fit.export_html(str(plots_dir / "fitted_ellipsoid.html"))
             pl_fit.close()
