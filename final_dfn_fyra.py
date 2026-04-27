@@ -481,7 +481,7 @@ if __name__ == "__main__":
         prob = cp.Problem(cp.Minimize(
             cp.sum_squares(A @ k_vec - fit_k * K_SCALE)))
 
-        # Prova med CLARABEL i första hand, fall tillbaka på standard om den saknas
+        #  testar Clarabel, tillbaka på standard om den saknas
         try:
             prob.solve(solver=cp.CLARABEL)
         except Exception:
