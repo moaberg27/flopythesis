@@ -180,14 +180,38 @@ if __name__ == "__main__":
         time = np.array(time) / (60*60)  # convert to hours
         length = np.array(length)
 
-        # Calculate effective porosity
+        # POROSITY 
         V_bulk = regbox.xl * regbox.yl * regbox.zl
         Q_tot = sum_flows
-        print(f"Bulk volume: {V_bulk:.2e} m^3")
-        print(f"Total flow rate: {Q_tot:.2e} m^3/s")
-        tau = np.mean(time)*(60*60)  # convert to seconds
-        phi_eff = (tau * Q_tot)/V_bulk
-        print(f"Effective porosity: {phi_eff:.4e}")
+        print(f"\n---- POROSITY ----")
+        print(f"Bulk volume:      {V_bulk:.2e} m^3")
+        print(f"Total flow rate:  {Q_tot:.2e} m^3/s")
+
+        # 1: geometrical – all connected fractures inside the box
+        phi_geo_all = sum(
+            np.pi * f.radius**2 * (f.aperture if f.aperture is not None else 0.0)
+            for f in dfn.fractures
+        ) / V_bulk
+        print(f"Geometrical porosity (all connected):  phi_geo_all  = {phi_geo_all:.4e}")
+
+        # 2: geometrical with flow condition
+        # Only fractures that have at least one inflow ConstantHeadLine (q < -1e-16)
+        flowing_frac_ids = {
+            id(e.frac0)
+            for e in dfn.elements
+            if isinstance(e, andfn.const_head.ConstantHeadLine) and e.q < -1e-16
+        }
+        phi_geo_flow = sum(
+            np.pi * f.radius**2 * (f.aperture if f.aperture is not None else 0.0)
+            for f in dfn.fractures
+            if id(f) in flowing_frac_ids
+        ) / V_bulk
+        print(f"Geometrical porosity (flow-carrying):  phi_geo_flow = {phi_geo_flow:.4e}")
+
+        # 3: effective (kinematic) porosity from mean particle travel time
+        tau = np.mean(time) * (60 * 60)  # time is in hours; convert back to seconds
+        phi_eff = (tau * Q_tot) / V_bulk
+        print(f"Effective (kinematic) porosity:        phi_eff      = {phi_eff:.4e}")
 
 
         p1.show()
@@ -200,9 +224,9 @@ if __name__ == "__main__":
     print(f"\t-plotting: \t\t{end - start2}")
 
     # Plot break through curve
-    time  = time / (24 * 365)
-    an_len = length[time > 0.1]
-    time = time[time > 0.1]
+    time  = time / (24 * 365) # convert to years
+    an_len = length[time > 0.1] # only consider travel times greater than 0.1 years to avoid very short paths that may not be representative
+    time = time[time > 0.1] 
 
     plt.figure(figsize=(8, 6))
     plot_cdf(time, label='AnDFN', color='red')
@@ -210,17 +234,29 @@ if __name__ == "__main__":
     plt.xscale('log')
     plt.xlabel('Travel Time [years]', fontsize=16, fontname='Times New Roman')
     plt.ylabel('Cumulative Distribution Function', fontsize=16, fontname='Times New Roman')
+    plt.title(
+        f"$\\phi_{{geo,all}}$={phi_geo_all:.3e}   "
+        f"$\\phi_{{geo,flow}}$={phi_geo_flow:.3e}   "
+        f"$\\phi_{{eff}}$={phi_eff:.3e}",
+        fontsize=13,
+    )
     plt.grid()
     plt.tight_layout()
     plt.tick_params(colors='black', labelsize=14, labelfontfamily="Times New Roman")
 
-    an_len = an_len[an_len > 200]
+    an_len = an_len[an_len > 200] # only consider trace lengths greater than 200 m to focus on more representative paths
     plt.figure(figsize=(8, 6))
     plot_cdf(an_len, label='AnDFN', color='red')
     plt.legend(prop={'size': 14, 'family': 'Times New Roman'})
     plt.xlabel('Trace length [m]', fontsize=16, fontname='Times New Roman')
     plt.ylabel('Cumulative Distribution Function', fontsize=16,
             fontname='Times New Roman')
+    plt.title(
+        f"$\\phi_{{geo,all}}$={phi_geo_all:.3e}   "
+        f"$\\phi_{{geo,flow}}$={phi_geo_flow:.3e}   "
+        f"$\\phi_{{eff}}$={phi_eff:.3e}",
+        fontsize=13,
+    )
     plt.grid()
     plt.tight_layout()
     plt.tick_params(colors='black', labelsize=14, labelfontfamily="Times New Roman")
