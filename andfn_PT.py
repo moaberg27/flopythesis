@@ -183,9 +183,127 @@ def _solver_converged(regbox):
     return imbalance < FLOW_IMBALANCE_TOL, imbalance, Q_low, Q_high
  
  
-def run_dfn_simulation(dfn_org, phi_deg, theta_deg, face_index,
-                       run_index=None, run_dir=None):
-    """Run one DFN flow simulation and return the effective conductivity.
+def _nan_pt_metrics():
+    """Return a dict of porosity / travel-time metrics filled with NaN."""
+    return {
+        "phi_geo_all":     np.nan,
+        "phi_geo_flow":    np.nan,
+        "phi_eff_mean":    np.nan,
+        "phi_eff_fast":    np.nan,
+        "phi_eff_slow":    np.nan,
+        "tau_geo_all_yr":  np.nan,
+        "tau_geo_flow_yr": np.nan,
+        "tau_mean_yr":     np.nan,
+        "tau_fast_yr":     np.nan,
+        "tau_slow_yr":     np.nan,
+        "n_streamlines":   0,
+        "_time_list_s":    [],
+        "_length_list_m":  [],
+    }
+
+
+def _run_particle_tracking(dfn, regbox):
+    """Particle tracking on an already-solved DFN; returns porosity metrics dict.
+
+    Uses an off-screen PyVista plotter (required by plot_streamline_tracking)
+    that is closed immediately after tracking -- no screenshots are saved per run.
+    """
+    from andfn.const_head import ConstantHeadLine as _CHL
+
+    V_bulk = regbox.xl * regbox.yl * regbox.zl
+    Q_low  = _flow_by_head(regbox, HEAD_LOW)
+    Q_high = _flow_by_head(regbox, HEAD_HIGH)
+    Q_tot  = float(0.5 * (Q_low + Q_high))
+
+    phi_geo_all = sum(
+        np.pi * f.radius ** 2 * (f.aperture if f.aperture is not None else 0.0)
+        for f in dfn.fractures
+    ) / V_bulk
+
+    flowing_frac_ids = {
+        id(e.frac0)
+        for e in dfn.elements
+        if isinstance(e, _CHL) and e.q < -1e-16
+    }
+    phi_geo_flow = sum(
+        np.pi * f.radius ** 2 * (f.aperture if f.aperture is not None else 0.0)
+        for f in dfn.fractures
+        if id(f) in flowing_frac_ids
+    ) / V_bulk
+
+    pt_plotter = dfn.initiate_plotter(off_screen=True)
+    cnt = 0
+    ss, vel, el = [], [], []
+    for e in dfn.elements:
+        if isinstance(e, _CHL) and e.q < -1e-16:
+            z_start = e.z_array_tracking(3, offset=1e-1)
+            elevation = [0.125, 0.25, 0.5, 0.75, 0.875]
+            streamlines, _, velocities, elements = dfn.plot_streamline_tracking(
+                pt_plotter, z_start, e.frac0,
+                ds=1e-2, max_length=5e3, line_width=4,
+                elevation=elevation, remove_false=True, backward=False,
+            )
+            ss.append(streamlines)
+            vel.append(velocities)
+            el.append(elements)
+            cnt += 1
+            if cnt > 100:
+                break
+    pt_plotter.close()
+
+    time_list = []
+    for strem, velo, elem in zip(ss, vel, el):
+        for v, s, ee in zip(velo, strem, elem):
+            if ee is False or len(s) == 0:
+                continue
+            t, _ = dfn.get_travel_time_and_length(s, v)
+            time_list.append(t)
+
+    length_list = []
+    for strem, velo, elem in zip(ss, vel, el):
+        for v, s, ee in zip(velo, strem, elem):
+            if ee is False or len(s) == 0:
+                continue
+            _, l = dfn.get_travel_time_and_length(s, v)
+            length_list.append(l)
+
+    _yr = 3600.0 * 24.0 * 365.0
+    tau_geo_all_yr  = (phi_geo_all  * V_bulk / Q_tot) / _yr if Q_tot > 0 else np.nan
+    tau_geo_flow_yr = (phi_geo_flow * V_bulk / Q_tot) / _yr if Q_tot > 0 else np.nan
+
+    if len(time_list) > 0 and Q_tot > 0:
+        tau_mean_s = float(np.mean(time_list))
+        tau_fast_s = float(np.min(time_list))
+        tau_slow_s = float(np.max(time_list))
+        phi_eff_mean = (tau_mean_s * Q_tot) / V_bulk
+        phi_eff_fast = (tau_fast_s * Q_tot) / V_bulk
+        phi_eff_slow = (tau_slow_s * Q_tot) / V_bulk
+        tau_mean_yr  = tau_mean_s / _yr
+        tau_fast_yr  = tau_fast_s / _yr
+        tau_slow_yr  = tau_slow_s / _yr
+    else:
+        phi_eff_mean = phi_eff_fast = phi_eff_slow = np.nan
+        tau_mean_yr  = tau_fast_yr  = tau_slow_yr  = np.nan
+
+    return {
+        "phi_geo_all":     phi_geo_all,
+        "phi_geo_flow":    phi_geo_flow,
+        "phi_eff_mean":    phi_eff_mean,
+        "phi_eff_fast":    phi_eff_fast,
+        "phi_eff_slow":    phi_eff_slow,
+        "tau_geo_all_yr":  tau_geo_all_yr,
+        "tau_geo_flow_yr": tau_geo_flow_yr,
+        "tau_mean_yr":     tau_mean_yr,
+        "tau_fast_yr":     tau_fast_yr,
+        "tau_slow_yr":     tau_slow_yr,
+        "n_streamlines":   cnt,
+        "_time_list_s":    time_list,       # raw travel times in seconds
+        "_length_list_m":  length_list,     # raw trace lengths in metres
+    }
+
+
+def run_dfn_simulation(dfn_org, phi_deg, theta_deg, face_index):
+    """Run one DFN flow simulation and return (k_eff, pt_metrics).
  
     The region box is rotated by phi around Z and then theta around X
     (matching R = Rx(theta) @ Rz(phi) applied to local face normals).
@@ -193,21 +311,17 @@ def run_dfn_simulation(dfn_org, phi_deg, theta_deg, face_index,
     `face_index`: 0 -> left/right (local X), 1 -> front/back (local Y),
     2 -> bottom/top (local Z).
  
-    If `run_index` and `run_dir` are given, a head-field plot is saved to
-    `<run_dir>/head_plots/head_<run_index>_phi<..>_theta<..>_face<..>.png`.
- 
-    Returns NaN if the solver fails (e.g. singular discharge matrix for a
-    degenerate/disconnected orientation) so the main loop can continue.
-    Also returns NaN when the solver runs to MAX_ITERATIONS without the
-    inlet/outlet flows balancing (detected via `_solver_converged`);
+    Returns (np.nan, _nan_pt_metrics()) if the solver fails so the main loop
+    can continue. Also returns NaN k when the solver runs to MAX_ITERATIONS
+    without the inlet/outlet flows balancing (detected via `_solver_converged`);
     oblique rotations sometimes produce near-degenerate intersections
     that the solver cannot resolve, and the resulting k values are
     meaningless and would poison the tensor fit.
- 
+
     On a diverged first pass the solve is retried once with more
     iterations and more coefficients; only a persistently unbalanced
     run is rejected.
- 
+
     `copy_dfn` gives this run its own Fracture objects, so mutations from
     `delete_fracture` / `frac_intersections` / `solve` don't leak back into
     `dfn_org` and successive runs start from the pristine imported state
@@ -268,22 +382,26 @@ def run_dfn_simulation(dfn_org, phi_deg, theta_deg, face_index,
                     f"  still diverged after retry "
                     f"(imbalance={imbalance:.2%}); rejecting"
                 )
-                return np.nan
+                return np.nan, _nan_pt_metrics()
  
         Q  = 0.5 * (Q_low + Q_high)  # averaged inlet/outlet flow
         dH = HEAD_HIGH - HEAD_LOW
         L  = BOX_SIZE
         A  = BOX_SIZE * BOX_SIZE
         k_eff = Q * L / (A * dH) # effective conductivity from Darcy's law: Q = k A dH / L
- 
-        if run_index is not None and run_dir is not None:
-            plot_dir = os.path.join(run_dir, "head_plots")
-            os.makedirs(plot_dir, exist_ok=True)
-            stem = (f"head_{run_index:04d}_phi{int(phi_deg):03d}"
-                    f"_theta{int(theta_deg):03d}_face{face_index}")
-            _save_head_plot(dfn, regbox, os.path.join(plot_dir, stem))
- 
-        return k_eff
+
+        try:
+            pt = _run_particle_tracking(dfn, regbox)
+        except Exception as pt_exc:
+            import traceback as _tb
+            logger.warning(
+                f"particle tracking failed "
+                f"(phi={phi_deg}, theta={theta_deg}, face={face_index}): "
+                f"{type(pt_exc).__name__}: {pt_exc}\n{_tb.format_exc()}"
+            )
+            pt = _nan_pt_metrics()
+
+        return k_eff, pt
     except Exception as exc:
         import traceback
         logger.warning(
@@ -291,7 +409,7 @@ def run_dfn_simulation(dfn_org, phi_deg, theta_deg, face_index,
             f"(phi={phi_deg}, theta={theta_deg}, face={face_index}): "
             f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         )
-        return np.nan
+        return np.nan, _nan_pt_metrics()
  
  
 # =====================================================================
@@ -313,7 +431,7 @@ if __name__ == "__main__":
     logger.info(f"Output directory: {run_dir}")
  
     dfn_org = andfn.DFN("DFN test FracMan", discharge_int=50)
-    path = os.path.join(r"C:\Users\SEAM94860\FLOPY\finalflopy\flopythesis\fracs_connected_properties.csv")
+    path = os.path.join(r"C:\Users\SEAM94860\FLOPY\finalflopy\flopythesis\dfn_6.csv")
     logger.info(f"DFN importing from file: {path}")
     dfn_org.import_fractures_from_file(
         path,
@@ -358,26 +476,44 @@ if __name__ == "__main__":
     n_total = len(all_rotation_states)
     all_k = np.empty(n_total)
     results_path = os.path.join(run_dir, "simulation_results.csv")
+    all_times_s   = []   # aggregated travel times (seconds) across all rotation states
+    all_lengths_m = []   # aggregated trace lengths (m)   across all rotation states
     with open(results_path, "w", newline="") as rf:
         rw = csv.writer(rf)
-        rw.writerow(["i", "phi_deg", "theta_deg", "face",
-                     "nx", "ny", "nz", "k_eff", "status"])
+        rw.writerow([
+            "i", "phi_deg", "theta_deg", "face",
+            "nx", "ny", "nz", "k_eff", "status",
+            "phi_geo_all", "phi_geo_flow",
+            "phi_eff_mean", "phi_eff_fast", "phi_eff_slow",
+            "tau_geo_all_yr", "tau_geo_flow_yr",
+            "tau_mean_yr", "tau_fast_yr", "tau_slow_yr",
+            "n_streamlines",
+        ])
         for i, state in enumerate(all_rotation_states):
             logger.info(f"start run  {i + 1:>3}/{n_total}  "
                         f"phi={state[0]:>3} deg  theta={state[1]:>3} deg  "
                         f"face={state[2]}")
-            k = run_dfn_simulation(dfn_org, *state,
-                                   run_index=i, run_dir=run_dir)
+            k, pt = run_dfn_simulation(dfn_org, *state)
             all_k[i] = k
             nx, ny, nz = all_directions[i]
             status = "ok" if (np.isfinite(k) and k > 0) else "invalid"
-            rw.writerow([i, state[0], state[1], state[2],
-                         f"{nx:.8f}", f"{ny:.8f}", f"{nz:.8f}",
-                         f"{k:.6e}", status])
+            rw.writerow([
+                i, state[0], state[1], state[2],
+                f"{nx:.8f}", f"{ny:.8f}", f"{nz:.8f}",
+                f"{k:.6e}", status,
+                pt["phi_geo_all"], pt["phi_geo_flow"],
+                pt["phi_eff_mean"], pt["phi_eff_fast"], pt["phi_eff_slow"],
+                pt["tau_geo_all_yr"], pt["tau_geo_flow_yr"],
+                pt["tau_mean_yr"], pt["tau_fast_yr"], pt["tau_slow_yr"],
+                pt["n_streamlines"],
+            ])
             rf.flush()
+            all_times_s.extend(pt["_time_list_s"])
+            all_lengths_m.extend(pt["_length_list_m"])
             logger.info(f"finish run {i + 1:>3}/{n_total}  "
                         f"phi={state[0]:>3} deg  theta={state[1]:>3} deg  "
-                        f"face={state[2]}   k={k:.4e}  [{status}]")
+                        f"face={state[2]}   k={k:.4e}  [{status}]  "
+                        f"n_sl={pt['n_streamlines']}")
  
     start2 = datetime.datetime.now()
  
@@ -794,7 +930,72 @@ if __name__ == "__main__":
             logger.warning(f"shell.html export failed: "
                            f"{type(exc).__name__}: {exc}")
         plotter_shell.show(screenshot=os.path.join(run_dir, "shell.png"))
- 
+
+    # ---------------------------------------------------------------
+    # PHASE 4 - BTC and trace-length CDFs from all rotation states
+    # ---------------------------------------------------------------
+    logger.info("---- BREAKTHROUGH CURVES (all rotation states) ----")
+    _yr = 3600.0 * 24.0 * 365.0
+    if len(all_times_s) > 0:
+        time_yr    = np.array(all_times_s) / _yr
+        length_m   = np.array(all_lengths_m)
+        an_len     = length_m[length_m > BOX_SIZE]
+
+        sorted_t = np.sort(time_yr)
+        cdf_t    = np.arange(1, len(sorted_t) + 1) / len(sorted_t)
+        fig_btc, ax_btc = plt.subplots(figsize=(8, 6))
+        ax_btc.plot(sorted_t, cdf_t, color="red", label="AnDFN (all rotations)")
+        ax_btc.set_xscale("log")
+        ax_btc.set_xlabel("Travel Time [years]", fontsize=16,
+                          fontname="Times New Roman")
+        ax_btc.set_ylabel("Cumulative Distribution Function", fontsize=16,
+                          fontname="Times New Roman")
+        ax_btc.set_title(
+            f"Breakthrough Curve — {len(all_rotation_states)} rotation states, "
+            f"{len(all_times_s)} streamlines",
+            fontsize=12,
+        )
+        ax_btc.legend(prop={"size": 14, "family": "Times New Roman"})
+        ax_btc.grid(True)
+        ax_btc.tick_params(colors="black", labelsize=14,
+                           labelfontfamily="Times New Roman")
+        fig_btc.tight_layout()
+        fig_btc.savefig(
+            os.path.join(run_dir, "breakthrough_curve.png"),
+            dpi=150, bbox_inches="tight",
+        )
+        plt.close(fig_btc)
+        logger.info("Saved breakthrough_curve.png")
+
+        if len(an_len) > 0:
+            sorted_l = np.sort(an_len)
+            cdf_l    = np.arange(1, len(sorted_l) + 1) / len(sorted_l)
+            fig_tl, ax_tl = plt.subplots(figsize=(8, 6))
+            ax_tl.plot(sorted_l, cdf_l, color="red", label="AnDFN (all rotations)")
+            ax_tl.set_xlabel("Trace length [m]", fontsize=16,
+                              fontname="Times New Roman")
+            ax_tl.set_ylabel("Cumulative Distribution Function", fontsize=16,
+                              fontname="Times New Roman")
+            ax_tl.set_title(
+                f"Trace Length CDF — paths longer than {BOX_SIZE:.0f} m",
+                fontsize=12,
+            )
+            ax_tl.legend(prop={"size": 14, "family": "Times New Roman"})
+            ax_tl.grid(True)
+            ax_tl.tick_params(colors="black", labelsize=14,
+                               labelfontfamily="Times New Roman")
+            fig_tl.tight_layout()
+            fig_tl.savefig(
+                os.path.join(run_dir, "trace_length_cdf.png"),
+                dpi=150, bbox_inches="tight",
+            )
+            plt.close(fig_tl)
+            logger.info("Saved trace_length_cdf.png")
+        else:
+            logger.info("No traces longer than box edge — trace_length_cdf.png skipped")
+    else:
+        logger.info("No streamlines collected across any rotation state — BTC skipped")
+
     end = datetime.datetime.now()
     logger.info(f"Program ended at {end}")
     logger.info(f"Time elapsed: {end - start0}")

@@ -48,7 +48,7 @@ if __name__ == "__main__":
     dfn_org = andfn.DFN("DFN test FracMan", discharge_int=50)
 
     # name ="p32_case11"
-    path = os.path.join(r"C:\Users\SEAM94860\FLOPY\finalflopy\flopythesis\fracs_connected_properties.csv")
+    path = os.path.join(r"C:\Users\SEAM94860\FLOPY\finalflopy\flopythesis\dfn_8.csv")
     #path = os.path.join(r"C:\Users\seet92866\PycharmProjects\DFN_exjobb\2", "15000fracs.csv")
     reload = False
 
@@ -79,15 +79,17 @@ if __name__ == "__main__":
         regbox = andfn.RectangularRegion(
             label="box",
             center=[0, 0, 0],
-            x_vec=[1, 0, 0],
-            y_vec=[0, 1, 0],
-            z_vec=[0, 0, 1],
+            x_vec=[1, 0, 0], # K1 principal directions of the box
+            y_vec=[0, 1, 0], # K2 principal directions of the box
+            z_vec=[0, 0, 1], # K3 principal directions of the box
             xl=500,
             yl=500,
             zl=500,
         )
-        regbox.rotate(angle=45, axis=[1, 0, 0])
-        regbox.rotate(angle=45, axis=[0, 0, 1])
+
+        #regbox.rotate(angle=45, axis=[1, 0, 0])
+        #regbox.rotate(angle=45, axis=[0, 0, 1])
+
         reg_fracs_in, reg_fracs_out = regbox.check_fractures(dfn.fractures, tree=dfn.tree)
 
         print(f"Number of fractures in the DFN: {len(dfn.fractures)}")
@@ -139,7 +141,7 @@ if __name__ == "__main__":
                 if e.q < -1e-16:
                     cnt += 1
                     celement = e
-                    z_start = celement.z_array_tracking(10, offset=1e-1)
+                    z_start = celement.z_array_tracking(5, offset=1e-1)
                     elevation = [0.125, 0.25, 0.5, 0.75, 0.875]
                     ds = 1e-2
                     streamlines, streamlines_fracs, velocities, elements = (
@@ -209,9 +211,33 @@ if __name__ == "__main__":
         print(f"Geometrical porosity (flow-carrying):  phi_geo_flow = {phi_geo_flow:.4e}")
 
         # 3: effective (kinematic) porosity from mean particle travel time
-        tau = np.mean(time) * (60 * 60)  # time is in hours; convert back to seconds
-        phi_eff = (tau * Q_tot) / V_bulk
-        print(f"Effective (kinematic) porosity:        phi_eff      = {phi_eff:.4e}")
+        tau_mean = np.mean(time) * (60 * 60)  # time is in hours; convert to seconds
+        phi_eff = (tau_mean * Q_tot) / V_bulk
+        print(f"Effective (kinematic) porosity (mean): phi_eff      = {phi_eff:.4e}")
+
+        # 4: effective (kinematic) porosity from fastest (minimum) travel time
+        tau_fast = np.min(time) * (60 * 60)   # time is in hours; convert to seconds
+        phi_eff_fast = (tau_fast * Q_tot) / V_bulk
+        print(f"Effective (kinematic) porosity (fast): phi_eff_fast = {phi_eff_fast:.4e}")
+
+        # 5: effective (kinematic) porosity from slowest (maximum) travel time
+        tau_slow = np.max(time) * (60 * 60)   # time is in hours; convert to seconds
+        phi_eff_slow = (tau_slow * Q_tot) / V_bulk
+        print(f"Effective (kinematic) porosity (slow): phi_eff_slow = {phi_eff_slow:.4e}")
+
+        # Travel times from geometrical porosities:  tau = phi * V_bulk / Q_tot
+        _yr = 3600 * 24 * 365  # seconds per year
+        tau_geo_all_yr  = (phi_geo_all  * V_bulk / Q_tot) / _yr
+        tau_geo_flow_yr = (phi_geo_flow * V_bulk / Q_tot) / _yr
+        tau_mean_yr     = tau_mean / _yr
+        tau_fast_yr     = tau_fast / _yr
+        tau_slow_yr     = tau_slow / _yr
+        print(f"\n---- TRAVEL TIMES (years) ----")
+        print(f"From phi_geo_all  (all connected):     tau_geo_all  = {tau_geo_all_yr:.4e}")
+        print(f"From phi_geo_flow (flow-carrying):     tau_geo_flow = {tau_geo_flow_yr:.4e}")
+        print(f"From particle tracking (mean):         tau_mean     = {tau_mean_yr:.4e}")
+        print(f"From particle tracking (fastest):      tau_fast     = {tau_fast_yr:.4e}")
+        print(f"From particle tracking (slowest):      tau_slow     = {tau_slow_yr:.4e}")
 
 
         p1.show()
@@ -225,8 +251,9 @@ if __name__ == "__main__":
 
     # Plot break through curve
     time  = time / (24 * 365) # convert to years
-    an_len = length[time > 0.1] # only consider travel times greater than 0.1 years to avoid very short paths that may not be representative
-    time = time[time > 0.1] 
+    an_len = length[length > regbox.xl]
+    time = time[length > regbox.xl]
+    
 
     plt.figure(figsize=(8, 6))
     plot_cdf(time, label='AnDFN', color='red')
@@ -235,16 +262,18 @@ if __name__ == "__main__":
     plt.xlabel('Travel Time [years]', fontsize=16, fontname='Times New Roman')
     plt.ylabel('Cumulative Distribution Function', fontsize=16, fontname='Times New Roman')
     plt.title(
-        f"$\\phi_{{geo,all}}$={phi_geo_all:.3e}   "
-        f"$\\phi_{{geo,flow}}$={phi_geo_flow:.3e}   "
-        f"$\\phi_{{eff}}$={phi_eff:.3e}",
+        f"$\\tau_{{geo,all}}$={tau_geo_all_yr:.2e} yr   "
+        f"$\\tau_{{geo,flow}}$={tau_geo_flow_yr:.2e} yr   "
+        f"$\\tau_{{mean}}$={tau_mean_yr:.2e} yr   "
+        f"$\\tau_{{fast}}$={tau_fast_yr:.2e} yr   "
+        f"$\\tau_{{slow}}$={tau_slow_yr:.2e} yr",
         fontsize=13,
     )
     plt.grid()
     plt.tight_layout()
     plt.tick_params(colors='black', labelsize=14, labelfontfamily="Times New Roman")
 
-    an_len = an_len[an_len > 200] # only consider trace lengths greater than 200 m to focus on more representative paths
+    # Plot trace length distribution
     plt.figure(figsize=(8, 6))
     plot_cdf(an_len, label='AnDFN', color='red')
     plt.legend(prop={'size': 14, 'family': 'Times New Roman'})
@@ -252,9 +281,11 @@ if __name__ == "__main__":
     plt.ylabel('Cumulative Distribution Function', fontsize=16,
             fontname='Times New Roman')
     plt.title(
-        f"$\\phi_{{geo,all}}$={phi_geo_all:.3e}   "
-        f"$\\phi_{{geo,flow}}$={phi_geo_flow:.3e}   "
-        f"$\\phi_{{eff}}$={phi_eff:.3e}",
+        f"$\\tau_{{geo,all}}$={tau_geo_all_yr:.2e} yr   "
+        f"$\\tau_{{geo,flow}}$={tau_geo_flow_yr:.2e} yr   "
+        f"$\\tau_{{mean}}$={tau_mean_yr:.2e} yr   "
+        f"$\\tau_{{fast}}$={tau_fast_yr:.2e} yr   "
+        f"$\\tau_{{slow}}$={tau_slow_yr:.2e} yr",
         fontsize=13,
     )
     plt.grid()
