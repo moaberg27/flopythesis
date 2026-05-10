@@ -1,0 +1,557 @@
+"""
+ECM equivalent of dfn_well.py.
+ 
+Single flow simulation along the x-axis with a tunnel (CHD cells, head=0)
+at the xy-center of the domain, starting at the top face and descending
+100 m. Particles are released on the tunnel cells and tracked BACKWARD to
+recover the capture zone. Outputs streamlines, BTC and trace-length CDFs,
+and a top-down view of the pathlines.
+"""
+ 
+import datetime
+import os
+import re
+from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import flopy
+ 
+ 
+def fix_fortran_scientific(path):
+    """Fix missing 'E' in Fortran scientific notation (e.g. 1.23-252 -> 1.23E-252)."""
+    text = Path(path).read_text()
+    fixed = re.sub(r'(\d)([-+]\d{2,3})(?=\s|$)', r'\1E\2', text, flags=re.MULTILINE)
+    if fixed != text:
+        Path(path).write_text(fixed)
+ 
+ 
+# -----------------------------------------------------------------------------
+# 1. INPUT PARAMETERS
+# -----------------------------------------------------------------------------
+ 
+# Principal hydraulic conductivities [m/s]
+K1 = 1.23e-08
+K2 = 1.03e-08
+K3 = 2.87e-09
+ 
+# Principal directions (eigenvectors in the GLOBAL frame of the DFN).
+v1 = np.array([0.2021, -0.9766, -0.073])
+v2 = np.array([-0.9793,  -0.2025, -0.002])
+v3 = np.array([ 0.0127, -0.072,  0.9973])
+ 
+# Porosity
+porosity = 5.10e-4
+ 
+# Domain and grid
+Lx = Ly = Lz = 500.0    # domain side length [m]
+dx = dy = dz = 25.0     # cell size [m]
+nlay = int(Lz / dz)    
+nrow = int(Ly / dy)
+ncol = int(Lx / dx)
+ 
+# Boundary conditions on the x-faces (head0=100 on left,
+# head1=200 on right).
+h_left  = 100.0   # j = 0
+h_right = 200.0   # j = ncol - 1
+ 
+# Tunnel (acts as a sink): top of domain, descending 100 m
+tunnel_head    = 0.0
+tunnel_length  = 100.0
+tunnel_radius  = 5.0
+tunnel_n_lay   = int(np.ceil(tunnel_length / dz))   # 100 m / 25 m = 4 layers
+ 
+# Particle tracking
+sim_time_years = 1.0e6
+seconds_per_year = 365.25 * 24 * 3600
+ 
+# Output workspace: ECM_runs/WELL_runs/<timestamp>
+run_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+out_dir = Path(r"C:\Users\SEAM94860\FLOPY\finalflopy") / "ECM_runs" / "WELL_runs" / run_ts
+out_dir.mkdir(parents=True, exist_ok=True)
+ 
+# Executables
+flopy_root = Path(__file__).resolve().parent
+mf6_exe = str((flopy_root / "mf6.exe").resolve())
+mp7_exe = str((flopy_root / "mpath7.exe").resolve())
+ 
+if not Path(mf6_exe).exists():
+    raise FileNotFoundError(f"MODFLOW 6 executable not found: {mf6_exe}")
+if not Path(mp7_exe).exists():
+    raise FileNotFoundError(f"MODPATH 7 executable not found: {mp7_exe}")
+ 
+ 
+# -----------------------------------------------------------------------------
+# 2. ROTATION ANGLES FROM EIGENVECTORS
+# -----------------------------------------------------------------------------
+ 
+def euler_angles_from_eigenvectors(v1, v2, v3):
+    """Return MODFLOW 6 (angle1, angle2, angle3) in degrees from the three
+    principal direction vectors. Convention: V = Rz(a1) . Ry(a2) . Rx(a3)."""
+    V = np.column_stack([v1, v2, v3])
+    if np.linalg.det(V) < 0:
+        V[:, 2] *= -1
+ 
+    cos_a2 = np.sqrt(V[0, 0] ** 2 + V[1, 0] ** 2)
+    a2 = np.arctan2(-V[2, 0], cos_a2)
+    if cos_a2 > 1e-6:
+        a1 = np.arctan2(V[1, 0], V[0, 0])
+        a3 = np.arctan2(V[2, 1], V[2, 2])
+    else:
+        a1 = 0.0
+        a3 = np.arctan2(-V[1, 2], V[1, 1])
+ 
+    return np.degrees([a1, a2, a3])
+ 
+ 
+angle1, angle2, angle3 = euler_angles_from_eigenvectors(v1, v2, v3)
+ 
+print("Principal conductivities:")
+print(f"  K1 = {K1:.3e}   K2 = {K2:.3e}   K3 = {K3:.3e}  m/s")
+print(f"Rotation angles (deg): {angle1:.3f}, {angle2:.3f}, {angle3:.3f}")
+ 
+ 
+# -----------------------------------------------------------------------------
+# 3. HELPERS
+# -----------------------------------------------------------------------------
+ 
+def make_cdf(data):
+    sorted_data = np.sort(data)
+    cdf = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
+    return sorted_data, cdf
+ 
+ 
+def plot_cdf(data, label, **kwargs):
+    sd, cdf = make_cdf(data)
+    plt.plot(sd, cdf, label=label, **kwargs)
+ 
+ 
+# -----------------------------------------------------------------------------
+# 4. SIMULATION (flow along x, with tunnel)
+# -----------------------------------------------------------------------------
+ 
+axis = "x"
+print(f"\n========== SIMULATION: flow along {axis} (with tunnel) ==========")
+
+sim_dir = out_dir / f"sim_{axis}_well"
+sim_dir.mkdir()
+ws = str(sim_dir)
+ 
+name = f"ecm_{axis}_well"
+sim = flopy.mf6.MFSimulation(
+    sim_name=name, sim_ws=ws, exe_name=mf6_exe, version="mf6"
+)
+flopy.mf6.ModflowTdis(
+    sim, time_units="SECONDS", nper=1, perioddata=[(1.0, 1, 1.0)]
+)
+flopy.mf6.ModflowIms(
+    sim,
+    complexity="MODERATE",
+    outer_dvclose=1e-6,
+    inner_dvclose=1e-7,
+    linear_acceleration="BICGSTAB",
+)
+gwf = flopy.mf6.ModflowGwf(sim, modelname=name, save_flows=True)
+ 
+top = Lz
+botm = [Lz - dz * (k + 1) for k in range(nlay)]
+flopy.mf6.ModflowGwfdis(
+    gwf,
+    nlay=nlay, nrow=nrow, ncol=ncol,
+    delr=dx, delc=dy,
+    top=top, botm=botm,
+    length_units="METERS",
+)
+ 
+flopy.mf6.ModflowGwfic(gwf, strt=h_right)
+ 
+flopy.mf6.ModflowGwfnpf(
+    gwf,
+    save_flows=True,
+    save_specific_discharge=True,
+    xt3doptions=True,
+    icelltype=0,
+    k=K1, k22=K2, k33=K3,
+    angle1=angle1, angle2=angle2, angle3=angle3,
+)
+ 
+# ---- CHD: x-face boundaries + tunnel ----
+chd_data = []
+ 
+# x-face boundaries
+for k in range(nlay):
+    for i in range(nrow):
+        chd_data.append([(k, i, 0),         h_left])
+        chd_data.append([(k, i, ncol - 1),  h_right])
+ 
+# Tunnel: single column of cells at the xy-center, top down 100 m
+# (radius 5 m < cell size 25 m, so represented by one column)
+i_tunnel = nrow // 2
+j_tunnel = ncol // 2
+tunnel_cells = []
+for k in range(tunnel_n_lay):
+    # Avoid double-prescribing on the inlet/outlet face columns
+    if j_tunnel in (0, ncol - 1):
+        continue
+    cell = (k, i_tunnel, j_tunnel)
+    chd_data.append([cell, tunnel_head])
+    tunnel_cells.append(cell)
+ 
+print(f"Tunnel CHD cells: {len(tunnel_cells)}  "
+      f"(layers 0..{tunnel_n_lay - 1}, row {i_tunnel}, col {j_tunnel})")
+ 
+flopy.mf6.ModflowGwfchd(gwf, stress_period_data=chd_data, save_flows=True)
+flopy.mf6.ModflowGwfoc(
+    gwf,
+    head_filerecord=f"{name}.hds",
+    budget_filerecord=f"{name}.cbc",
+    saverecord=[("HEAD", "ALL"), ("BUDGET", "ALL")],
+)
+ 
+print("Running MODFLOW 6 ...")
+sim.write_simulation()
+success, _ = sim.run_simulation(silent=True)
+if not success:
+    raise RuntimeError("MODFLOW 6 did not converge.")
+ 
+# Total flow rate from CHD budget (face inlets/outlets only, exclude tunnel)
+cbc = flopy.utils.CellBudgetFile(os.path.join(ws, f"{name}.cbc"))
+chd_rec = cbc.get_data(text="CHD", kstpkper=(0, 0))[0]
+node = np.asarray(chd_rec["node"], dtype=int) - 1   # MF6 returns 1-based
+q_chd = np.asarray(chd_rec["q"], dtype=float)
+k_t, i_t, j_t = np.unravel_index(node, (nlay, nrow, ncol))
+ 
+# Tunnel mask
+tunnel_mask = np.zeros_like(node, dtype=bool)
+for (kk, ii, jj) in tunnel_cells:
+    tunnel_mask |= (k_t == kk) & (i_t == ii) & (j_t == jj)
+ 
+face_mask = ~tunnel_mask
+Q_in_face   = q_chd[face_mask & (q_chd > 0)].sum()
+Q_out_face  = q_chd[face_mask & (q_chd < 0)].sum()
+Q_tunnel    = q_chd[tunnel_mask].sum()
+sum_flows   = 0.5 * (Q_in_face + abs(Q_out_face))   # mirror of regbox.get_total_flow()/2
+print(f"Face inflow:    {Q_in_face:.3e} m^3/s")
+print(f"Face outflow:   {Q_out_face:.3e} m^3/s")
+print(f"Tunnel q (sum): {Q_tunnel:.3e} m^3/s")
+print(f"Total flow through the box (avg in/out): {sum_flows:.3e} m^3/s")
+ 
+ 
+# -----------------------------------------------------------------------------
+# 5. PARTICLE TRACKING - BACKWARD FROM TUNNEL CELLS
+# -----------------------------------------------------------------------------
+ 
+print("\n---- PARTICLE TRACKING (backward from tunnel) ----")
+ 
+# Seeding: ring of particles around the tunnel axis, just OUTSIDE the
+# tunnel cell footprint, at every tunnel layer. The seed radius is set to
+# 0.55 * dx so seeds fall in the 4 cardinal-neighbor cells (and roughly
+# in the diagonal neighbors) of the tunnel column - i.e. in real flow
+# cells, not inside the CHD sink. Multiple elevations per layer mirror
+# the DFN script's vertical seeding.
+n_circle    = 16                                          # angular seeds per layer
+seed_radius = 0.55 * dx                                   # ~13.75 m, just outside the 25 m tunnel cell
+elevations  = [0.125, 0.25, 0.5, 0.75, 0.875]             # local-z offsets within layer
+angles      = np.linspace(0.0, 2.0 * np.pi, n_circle, endpoint=False)
+ 
+# Tunnel axis in global coords (cell-center of the tunnel column)
+x_axis = (j_tunnel + 0.5) * dx
+y_axis = (i_tunnel + 0.5) * dy
+ 
+particle_locs = []
+for (kk, _, _) in tunnel_cells:
+    for theta in angles:
+        x_seed = x_axis + seed_radius * np.cos(theta)
+        y_seed = y_axis + seed_radius * np.sin(theta)
+        # Map global xy -> structured (row, col) and local (lx, ly) inside that cell
+        j_seed = int(x_seed // dx)
+        i_seed = int(y_seed // dy)
+        if not (0 <= j_seed < ncol and 0 <= i_seed < nrow):
+            continue
+        # Skip the tunnel cell itself (shouldn't happen at r=0.55*dx, but guard)
+        if (j_seed, i_seed) == (j_tunnel, i_tunnel):
+            continue
+        lx = (x_seed - j_seed * dx) / dx
+        ly = (y_seed - i_seed * dy) / dy
+        for lz in elevations:
+            particle_locs.append(((kk, i_seed, j_seed), lx, ly, lz))
+ 
+pdata = flopy.modpath.ParticleData(
+    partlocs=[p[0] for p in particle_locs],
+    structured=True,
+    localx=[p[1] for p in particle_locs],
+    localy=[p[2] for p in particle_locs],
+    localz=[p[3] for p in particle_locs],
+    drape=0,
+)
+pg = flopy.modpath.ParticleGroup(
+    particlegroupname="tunnel_back",
+    particledata=pdata,
+    filename=f"{name}.sloc",
+)
+ 
+mp_name = f"{name}_mp"
+mp = flopy.modpath.Modpath7(
+    modelname=mp_name, flowmodel=gwf, exe_name=mp7_exe, model_ws=ws,
+)
+flopy.modpath.Modpath7Bas(mp, porosity=porosity)
+flopy.modpath.Modpath7Sim(
+    mp,
+    simulationtype="pathline",
+    trackingdirection="backward",
+    weaksinkoption="pass_through",
+    weaksourceoption="pass_through",
+    referencetime=0.0,
+    stoptimeoption="specified",
+    stoptime=sim_time_years * seconds_per_year,
+    particlegroups=[pg],
+)
+ 
+print(f"Particles released: {len(particle_locs)}  "
+      f"({len(tunnel_cells)} layers * {n_circle} angular seeds "
+      f"* {len(elevations)} elevations, ring r={seed_radius:.2f} m)")
+print("Running MODPATH 7 ...")
+mp.write_input()
+success, _ = mp.run_model(silent=True)
+if not success:
+    raise RuntimeError("MODPATH 7 did not run.")
+ 
+# Endpoints
+mpend_path = os.path.join(ws, f"{mp_name}.mpend")
+fix_fortran_scientific(mpend_path)
+endpoints = flopy.utils.EndpointFile(mpend_path).get_alldata()
+ 
+# Pathlines (for top-down plot and trace lengths)
+mppth_path = os.path.join(ws, f"{mp_name}.mppth")
+fix_fortran_scientific(mppth_path)
+pathlines = flopy.utils.PathlineFile(mppth_path).get_alldata()
+ 
+# Endpoint termination diagnostics. MODPATH 7 status codes:
+# 2 = terminated at boundary face, 3 = terminated in weak sink/source,
+# 5 = terminated at stop time, 7 = terminated at zone, 8 = inactive cell.
+node_term = np.asarray(endpoints["node"], dtype=int)
+k_e, i_e, j_e = np.unravel_index(node_term, (nlay, nrow, ncol))
+status = np.asarray(endpoints["status"], dtype=int)
+print(f"\nEndpoint status counts: "
+      + ", ".join(f"{int(s)}:{int((status == s).sum())}" for s in np.unique(status)))
+print(f"  reached high-head face (j={ncol - 1}): {int((j_e == ncol - 1).sum())}")
+print(f"  reached low-head face  (j=0):           {int((j_e == 0).sum())}")
+print(f"  reached top    (k=0):                   {int((k_e == 0).sum())}")
+print(f"  reached bottom (k={nlay - 1}):           {int((k_e == nlay - 1).sum())}")
+ 
+# Trace lengths from pathline file
+def pathline_length(pl):
+    if len(pl) < 2:
+        return 0.0
+    xyz = np.column_stack([pl["x"], pl["y"], pl["z"]])
+    return float(np.linalg.norm(np.diff(xyz, axis=0), axis=1).sum())
+ 
+# Use every successfully traced particle (matches dfn_well behavior).
+pid_endpoint = np.asarray(endpoints["particleid"], dtype=int)
+ 
+length_list = []
+time_list   = []
+captured_pls = []
+for pl in pathlines:
+    if len(pl) == 0:
+        continue
+    pid = int(pl["particleid"][0])
+    captured_pls.append(pl)
+    length_list.append(pathline_length(pl))
+    idx = np.where(pid_endpoint == pid)[0]
+    if len(idx) > 0:
+        time_list.append(float(endpoints["time"][idx[0]]) / 3600.0)  # hours
+ 
+time = np.asarray(time_list)
+length = np.asarray(length_list)
+ 
+ 
+# -----------------------------------------------------------------------------
+# 6. POROSITY DIAGNOSTICS
+# -----------------------------------------------------------------------------
+ 
+V_bulk = Lx * Ly * Lz
+Q_tot = sum_flows
+print(f"\n---- POROSITY ({axis}) ----")
+print(f"Bulk volume:      {V_bulk:.2e} m^3")
+print(f"Total flow rate:  {Q_tot:.2e} m^3/s")
+ 
+if len(time) > 0:
+    tau_mean = float(np.mean(time)) * 3600.0
+    tau_median = float(np.median(time)) * 3600.0
+    tau_fast = float(np.min(time))  * 3600.0
+    tau_slow = float(np.max(time))  * 3600.0
+else:
+    tau_mean = tau_median = tau_fast = tau_slow = np.nan
+ 
+phi_eff_mean = (tau_mean * Q_tot) / V_bulk if Q_tot != 0 else np.nan
+phi_eff_median = (tau_median * Q_tot) / V_bulk if Q_tot != 0 else np.nan
+phi_eff_fast = (tau_fast * Q_tot) / V_bulk if Q_tot != 0 else np.nan
+phi_eff_slow = (tau_slow * Q_tot) / V_bulk if Q_tot != 0 else np.nan
+print(f"Effective (kinematic) porosity (mean): phi_eff_mean      = {phi_eff_mean:.4e}")
+print(f"Effective (kinematic) porosity (median): phi_eff_median = {phi_eff_median:.4e}")
+print(f"Effective (kinematic) porosity (fast): phi_eff_fast = {phi_eff_fast:.4e}")
+print(f"Effective (kinematic) porosity (slow): phi_eff_slow = {phi_eff_slow:.4e}")
+ 
+_yr = 3600 * 24 * 365
+tau_mean_yr = tau_mean / _yr
+tau_median_yr = tau_median / _yr
+tau_fast_yr = tau_fast / _yr
+tau_slow_yr = tau_slow / _yr
+tau_geo_yr  = (porosity * V_bulk / Q_tot) / _yr if Q_tot != 0 else np.nan
+ 
+ 
+# -----------------------------------------------------------------------------
+# 7. CSV OUTPUTS
+# -----------------------------------------------------------------------------
+ 
+df = pd.DataFrame({"travel_time_hours": time, "trace_length_m": length})
+df.to_csv(sim_dir / f"particles_{axis}.csv", index=False)
+ 
+summary = {
+    "simulation": axis,
+    "tunnel_q_m3_s": float(Q_tunnel),
+    "tunnel_n_cells": int(len(tunnel_cells)),
+    "V_bulk_m3": V_bulk,
+    "Q_tot_m3_s": Q_tot,
+    "porosity_input": porosity,
+    "phi_eff_mean": phi_eff_mean,
+    "phi_eff_median": phi_eff_median,
+    "phi_eff_fast": phi_eff_fast,
+    "phi_eff_slow": phi_eff_slow,
+    "tau_geo_yr": tau_geo_yr,
+    "tau_mean_yr": tau_mean_yr,
+    "tau_median_yr": tau_median_yr,
+    "tau_fast_yr": tau_fast_yr,
+    "tau_slow_yr": tau_slow_yr,
+    "n_particles_released": int(len(endpoints)),
+    "n_particles_traced":   int(len(captured_pls)),
+}
+pd.DataFrame([summary]).to_csv(sim_dir / f"summary_{axis}.csv", index=False)
+ 
+ 
+# -----------------------------------------------------------------------------
+# 8. PLOTS
+# -----------------------------------------------------------------------------
+ 
+time_yr = time / (24 * 365)            # hours -> years
+mask = length > Lx
+an_len = length[mask]
+time_yr_filt = time_yr[mask]
+ 
+# BTC plot
+plt.figure(figsize=(8, 6))
+if len(time_yr_filt) > 0:
+    plot_cdf(time_yr_filt, label="ECM backward from tunnel", color="blue")
+plt.legend(prop={"size": 14, "family": "Times New Roman"})
+plt.xscale("log")
+plt.xlabel("Travel Time [years]", fontsize=16, fontname="Times New Roman")
+plt.ylabel("Cumulative Distribution Function", fontsize=16, fontname="Times New Roman")
+plt.title(
+    f"[{axis} + tunnel]  "
+    f"$\\tau_{{geo}}$={tau_geo_yr:.2e} yr   "
+    f"$\\tau_{{mean}}$={tau_mean_yr:.2e} yr   "
+    f"$\\tau_{{fast}}$={tau_fast_yr:.2e} yr   "
+    f"$\\tau_{{slow}}$={tau_slow_yr:.2e} yr",
+    fontsize=11,
+)
+plt.grid()
+plt.tight_layout()
+plt.tick_params(colors="black", labelsize=14, labelfontfamily="Times New Roman")
+plt.savefig(sim_dir / f"btc_{axis}.png", dpi=150)
+plt.close()
+ 
+# Trace length CDF
+plt.figure(figsize=(8, 6))
+if len(an_len) > 0:
+    plot_cdf(an_len, label="ECM backward from tunnel", color="blue")
+plt.legend(prop={"size": 14, "family": "Times New Roman"})
+plt.xlabel("Trace length [m]", fontsize=16, fontname="Times New Roman")
+plt.ylabel("Cumulative Distribution Function", fontsize=16, fontname="Times New Roman")
+plt.title(f"Trace lengths - flow along {axis} (tunnel capture zone)", fontsize=13)
+plt.grid()
+plt.tight_layout()
+plt.tick_params(colors="black", labelsize=14, labelfontfamily="Times New Roman")
+plt.savefig(sim_dir / f"tracelength_{axis}.png", dpi=150)
+plt.close()
+ 
+# Top-down pathline plot (xy plane)
+print("\n---- TOP-DOWN PATHLINE PLOT ----")
+plt.figure(figsize=(8, 8))
+valid = 0
+for pl in captured_pls:
+    if len(pl) == 0:
+        continue
+    plt.plot(pl["x"], pl["y"], color="blue", lw=0.6, alpha=0.7)
+    valid += 1
+ 
+# Tunnel marker (top of tunnel column, in cell-center coords)
+x_tun = (j_tunnel + 0.5) * dx
+y_tun = (i_tunnel + 0.5) * dy
+plt.scatter([x_tun], [y_tun],
+            c="black", marker="o", s=40, zorder=5,
+            label=f"tunnel axis (r={tunnel_radius} m, L={tunnel_length:.0f} m)")
+plt.gca().set_aspect("equal", adjustable="box")
+plt.xlim(0, Lx)
+plt.ylim(0, Ly)
+plt.xlabel("x [m]", fontsize=14, fontname="Times New Roman")
+plt.ylabel("y [m]", fontsize=14, fontname="Times New Roman")
+plt.title(f"Pathlines (top view) - {valid} backward streamlines", fontsize=13)
+plt.legend(prop={"size": 12, "family": "Times New Roman"})
+plt.grid()
+plt.tight_layout()
+plt.savefig(sim_dir / f"pathlines_top_{axis}.png", dpi=150)
+plt.close()
+ 
+# -----------------------------------------------------------------------------
+# 9. 3D PYVISTA VISUALIZATION OF MODPATH PATHLINES
+# -----------------------------------------------------------------------------
+ 
+print("\n---- 3D PYVISTA PATHLINE PLOT ----")
+import pyvista as pv
+from flopy.export.vtk import Vtk
+ 
+pv.set_plot_theme("document")
+ 
+vtk = Vtk(model=gwf, binary=False, vertical_exageration=1, smooth=False)
+vtk.add_model(gwf)
+vtk.add_pathline_points(pathlines)
+grid_mesh, pathlines_mesh = vtk.to_pyvista()
+ 
+# Tunnel as a vertical tube along the well column (top of domain, descending 100 m)
+x_tun = (j_tunnel + 0.5) * dx
+y_tun = (i_tunnel + 0.5) * dy
+z_top = float(top)
+z_bot = float(top) - tunnel_length
+well_line = pv.Line((x_tun, y_tun, z_top), (x_tun, y_tun, z_bot))
+well_tube = well_line.tube(radius=tunnel_radius)
+ 
+def _build_plotter(off_screen):
+    pl = pv.Plotter(off_screen=off_screen)
+    pl.add_mesh(grid_mesh, color="white", opacity=0.1)
+    pl.add_mesh(
+        pathlines_mesh,
+        scalars="time",
+        cmap="viridis",
+        point_size=6,
+        render_points_as_spheres=True,
+    )
+    pl.add_mesh(well_tube, color="black")
+    pl.add_axes()
+    pl.camera.zoom(1.3)
+    return pl
+ 
+# Save screenshot first (off-screen, no window needed)
+p_save = _build_plotter(off_screen=True)
+p_save.screenshot(str(sim_dir / f"pathlines_3d_{axis}.png"))
+p_save.close()
+ 
+# Then open interactive window
+p_show = _build_plotter(off_screen=False)
+p_show.show()
+ 
+print(f"\nSimulation {axis} done.")
+print(f"All outputs saved in: {sim_dir}")
+print("All done!")
+ 
+ 

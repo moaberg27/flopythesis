@@ -45,7 +45,8 @@ if __name__ == "__main__":
     nint = ncoef * 2
  
     # Output folder
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pt_runs")
+    run_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = os.path.join(r"C:\Users\SEAM94860\FLOPY\finalflopy", "DFN_runs", "PT_runs", run_ts)
     os.makedirs(out_dir, exist_ok=True)
  
     start0 = datetime.datetime.now()
@@ -72,8 +73,8 @@ if __name__ == "__main__":
  
     # Rotated region-box axes (provided) - orthonormalized via Gram-Schmidt
     # to fix small non-orthogonalities in the input values.
-    _x = np.array([-0.6761, -0.7327, -0.0773], dtype=float)
-    _y = np.array([-0.7359, 0.6666, 0.1188], dtype=float)
+    _x = np.array([0.2021, -0.9766, -0.073], dtype=float)
+    _y = np.array([-0.9793, -0.2025, -0.002], dtype=float)
     _x /= np.linalg.norm(_x)
     _y -= np.dot(_y, _x) * _x
     _y /= np.linalg.norm(_y)
